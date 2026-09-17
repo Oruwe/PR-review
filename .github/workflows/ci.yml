@@ -36,5 +36,19 @@ jobs:
       - name: Docker sanity
         run: docker info
 
+      - name: Clone the target repo
+        # seed_target.py refuses to run without this clone already present — on a
+        # fresh checkout nothing has made it yet. Locally it usually already
+        # exists from earlier fixture runs, which is exactly the kind of local
+        # state this workflow can't assume.
+        run: python3 -c "from prflagger.sandbox.runner import bare_clone; bare_clone('pallets/click')"
+
+      - name: Seed the target repo's demo branches
+        # A large slice of the suite (test_cli, test_differential, test_probes,
+        # test_report) requires these and fails with a named, non-cryptic error
+        # without them — README documents this as a precondition, but nothing
+        # in this workflow had actually run it.
+        run: python -m scripts.seed_target
+
       - name: pytest
         run: pytest tests/ -q

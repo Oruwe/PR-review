@@ -182,15 +182,30 @@ def build_image(repo_path: Path, image_key: str) -> str:
     return tag
 
 
+def _readable_file(path: Path) -> bool:
+    """`path.is_file()`, but a permission error means "not usable," not a crash.
+
+    `_CA_FALLBACK` is this one machine's proxy CA path. On any other machine
+    (including a normal CI runner) that directory can exist but be owned by a
+    different user entirely — `.is_file()` itself raises `PermissionError`
+    rather than returning False. Either way the answer this function needs is
+    the same: this system has no CA bundle to stage.
+    """
+    try:
+        return path.is_file()
+    except OSError:
+        return False
+
+
 def _stage_ca_bundle() -> Path | None:
     """Put this machine's CA where the build can COPY it, or None if there is no CA."""
     for variable in _CA_ENV_VARS:
         raw = os.environ.get(variable)
-        if raw and Path(raw).is_file():
+        if raw and _readable_file(Path(raw)):
             source = Path(raw)
             break
     else:
-        if not _CA_FALLBACK.is_file():
+        if not _readable_file(_CA_FALLBACK):
             return None
         source = _CA_FALLBACK
 

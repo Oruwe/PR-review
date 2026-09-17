@@ -307,3 +307,42 @@ def test_reseeding_is_idempotent() -> None:
     assert {b: m["head"] for b, m in after.items()} == {
         b: m["head"] for b, m in before.items()
     }, "re-running the seeder must land on the same commits"
+
+
+# --------------------------------------------------------------------------------------
+# A CA path this machine cannot read is "no CA," not a crash
+# --------------------------------------------------------------------------------------
+
+
+def test_readable_file_treats_permission_denied_as_absent(monkeypatch, tmp_path) -> None:
+    # The real bug: on a machine where the proxy CA path exists but is owned by
+    # someone else (a normal CI runner, not this sandbox), Path.is_file() itself
+    # raises PermissionError rather than returning False.
+    target = tmp_path / "ca-bundle.crt"
+    target.write_text("not real")
+
+    def _raise(self: Path) -> bool:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "is_file", _raise)
+    assert runner._readable_file(target) is False
+
+
+def test_readable_file_still_finds_a_real_one(tmp_path) -> None:
+    target = tmp_path / "ca-bundle.crt"
+    target.write_text("not real")
+    assert runner._readable_file(target) is True
+
+
+def test_stage_ca_bundle_degrades_to_none_on_permission_denied(monkeypatch) -> None:
+    # _CA_FALLBACK is this one sandbox's proxy cert. On any other machine it must
+    # never crash the build — it must mean "this build has no CA to stage."
+    monkeypatch.delenv("PRFLAGGER_CA_BUNDLE", raising=False)
+    monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+    monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+
+    def _raise(self: Path) -> bool:
+        raise PermissionError(13, "Permission denied", str(self))
+
+    monkeypatch.setattr(Path, "is_file", _raise)
+    assert runner._stage_ca_bundle() is None
