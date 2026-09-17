@@ -248,6 +248,9 @@ class PrRecord:
     files_changed: tuple[dict[str, Any], ...] = ()
     changed_symbols: tuple[Symbol, ...] = ()
     callers: tuple[Symbol, ...] = ()
+    # caller -> callee, restricted to the radius. The real edges from the call graph,
+    # so the blast radius can be drawn rather than described.
+    edges: tuple[tuple[str, str], ...] = ()
     hops: int = 2
     insertions: int = 0
     deletions: int = 0
@@ -272,6 +275,7 @@ class PrRecord:
             "files_changed": [dict(row) for row in self.files_changed],
             "changed_symbols": [_symbol_dict(s) for s in self.changed_symbols],
             "callers": [_symbol_dict(s) for s in self.callers],
+            "edges": [[caller, callee] for caller, callee in self.edges],
             "hops": self.hops,
             "run_ids": list(self.run_ids),
             "finding_ids": list(self.finding_ids),

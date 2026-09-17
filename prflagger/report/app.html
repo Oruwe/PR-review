@@ -28,6 +28,8 @@
 
 * { box-sizing: border-box; }
 
+[hidden] { display: none !important; }
+
 html { background: var(--bg); }
 
 body {
@@ -57,9 +59,9 @@ code, pre, .mono { font-family: var(--mono); font-variant-ligatures: none; }
 .masthead {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  gap: 22px 56px;
+  gap: 18px 56px;
   align-items: end;
-  padding: 36px 0 20px;
+  padding: 26px 0 16px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -112,7 +114,7 @@ code, pre, .mono { font-family: var(--mono); font-variant-ligatures: none; }
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-dim);
-  max-width: 14ch;
+  max-width: 16ch;
   line-height: 1.3;
 }
 
@@ -134,7 +136,7 @@ code, pre, .mono { font-family: var(--mono); font-variant-ligatures: none; }
 
 /* ------------------------------------------------------------------ zones */
 
-.zone { padding: 42px 0 0; }
+.zone { padding: 32px 0 0; }
 
 .zone-head {
   display: flex;
@@ -400,7 +402,8 @@ code, pre, .mono { font-family: var(--mono); font-variant-ligatures: none; }
   transition: transform 200ms ease-out, color 200ms ease-out;
 }
 
-.flag.is-open .caret { transform: rotate(90deg); color: var(--orange); }
+.flag.is-open .caret,
+.pr.is-open .caret { transform: rotate(90deg); color: var(--orange); }
 
 .flag-main { min-width: 0; }
 
@@ -616,6 +619,352 @@ pre.evidence.source::selection { color: var(--text); }
   max-width: 70ch;
 }
 
+/* -------------------------------------------------------------- pr list */
+
+.zone-note.wide { max-width: 92ch; font-size: 15px; margin-bottom: 20px; }
+.zone-note.wide b { color: var(--text); font-weight: 600; }
+
+.pr-list { display: flex; flex-direction: column; gap: 8px; }
+
+.pr {
+  background: var(--surface);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.pr.is-open { background: var(--surface-2); }
+
+.pr-row {
+  width: 100%;
+  display: grid;
+  grid-template-columns: 22px 78px minmax(0, 1fr) auto auto;
+  gap: 4px 18px;
+  align-items: center;
+  padding: 15px 22px 15px 16px;
+  text-align: left;
+}
+
+.pr-row .num-cell { font-family: var(--mono); font-size: 14.5px; color: var(--orange); }
+
+.pr-row .title { min-width: 0; }
+
+.pr-row .title b { display: block; font-weight: 600; font-size: 15.5px; }
+
+.pr-row .title span {
+  display: block;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sev-dots { display: flex; gap: 4px; align-items: center; }
+
+.sev-dots i { width: 9px; height: 9px; border-radius: 50%; display: block; }
+
+.sev-dots i.sev-1 { background: var(--red); }
+.sev-dots i.sev-08 { background: var(--orange); }
+.sev-dots i.sev-05 { background: var(--orange-mid); }
+.sev-dots i.sev-03 { background: var(--text-dim); }
+.sev-dots i.ok { background: var(--green); }
+.sev-dots i.bad { background: var(--red); }
+
+.sev-dots em {
+  font-style: normal;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  margin-left: 4px;
+}
+
+.pr-body { display: none; padding: 0 22px 24px; }
+
+.pr.is-open .pr-body { display: block; }
+
+.pr-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 26px; }
+
+.panel { border-top: 1px solid var(--line); padding-top: 16px; }
+
+.panel h4 {
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
+.account { margin: 0; font-size: 15px; color: var(--text); }
+
+.account .n { font-variant-numeric: tabular-nums; color: var(--orange); }
+
+.sym-list {
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.sym-list li { color: var(--text-dim); overflow-wrap: anywhere; }
+
+.sym-list li b { color: var(--text); font-weight: 400; }
+
+.sym-list li i { font-style: normal; color: var(--orange-mid); }
+
+#blast { width: 100%; height: auto; display: block; margin-top: 8px; }
+
+.blast-edge {
+  fill: none;
+  stroke: var(--orange-dim);
+  stroke-width: 1.4;
+}
+
+.blast-edge.is-traced { stroke: var(--orange); opacity: 0.6; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .blast-edge.is-traced { animation: trace 340ms ease-out both; }
+}
+
+@keyframes trace {
+  from { stroke-dasharray: 0 400; }
+  to { stroke-dasharray: 400 0; }
+}
+
+.blast-node { fill: var(--surface); stroke: var(--line); }
+.blast-node.is-changed { fill: #241C14; stroke: var(--orange); }
+.blast-label { font: 400 11px var(--mono); fill: var(--text-dim); }
+.blast-label.is-changed { fill: var(--text); }
+
+/* --------------------------------------------------------------- sandbox run */
+
+.run { background: var(--bg); border-radius: 10px; padding: 14px 16px; margin-top: 10px; }
+
+.run-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+
+.run-head h5 { margin: 0; font-size: 14.5px; font-weight: 600; }
+
+.run-head .meta { font-size: 12.5px; color: var(--text-dim); font-family: var(--mono); }
+
+.container-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+  gap: 10px 16px;
+  margin: 12px 0 0;
+}
+
+.container-facts dt {
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.container-facts dd { margin: 2px 0 0; font-size: 13px; font-family: var(--mono); }
+
+.tabs { display: flex; gap: 6px; margin: 14px 0 10px; flex-wrap: wrap; align-items: center; }
+
+.tab {
+  padding: 5px 12px;
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--text-dim);
+  background: var(--surface);
+}
+
+.tab[aria-pressed="true"] { background: var(--surface-2); color: var(--text); }
+
+.transport { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
+
+.transport button {
+  padding: 5px 11px;
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.transport button:hover { color: var(--text); background: var(--surface-2); }
+
+.transport button.primary { background: var(--surface-2); color: var(--orange); min-width: 74px; }
+
+.transport .clock {
+  font-family: var(--mono);
+  font-size: 12.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  min-width: 96px;
+}
+
+.transport input[type="range"] { flex: 1 1 140px; accent-color: var(--orange); min-width: 120px; }
+
+.transport input[type="search"] {
+  flex: 1 1 160px;
+  min-width: 140px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 7px;
+  padding: 5px 10px;
+  font: 13px var(--mono);
+}
+
+.log {
+  background: #0A0806;
+  border-radius: 8px;
+  padding: 10px 0;
+  height: 288px;
+  overflow-y: auto;
+  font: 12.5px/1.5 var(--mono);
+  white-space: pre;
+  color: var(--text-dim);
+  scroll-behavior: auto;
+}
+
+.log .row { display: block; padding: 0 14px; }
+
+.log .row .t {
+  /* The timestamp gutter is text, so it takes a token that reaches AA — --orange-dim
+     is for wiring, and at 2.2:1 it would be unreadable here. */
+  color: var(--orange-mid);
+  display: inline-block;
+  width: 62px;
+  user-select: none;
+}
+
+.log .row.is-fail { color: var(--red); }
+.log .row.is-pass .v { color: var(--text-dim); }
+.log .row.is-omitted { color: var(--orange-mid); font-style: italic; }
+.log .row.is-hit { background: rgba(255, 165, 92, 0.13); color: var(--text); }
+.log .row.is-anchor { background: rgba(255, 107, 92, 0.16); color: var(--text); }
+
+.log-empty { padding: 14px; color: var(--text-dim); font: 13px var(--sans); }
+
+/* ------------------------------------------------------------ the loop panel */
+
+.loop {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 28px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  padding: 22px 24px 24px;
+}
+
+.loop-steps { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 2px; }
+
+.loop-steps li {
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr);
+  gap: 10px;
+  padding: 9px 0;
+  color: var(--text-dim);
+  font-size: 14px;
+  align-items: start;
+  opacity: 0.45;
+  transition: opacity 200ms ease-out, color 200ms ease-out;
+}
+
+.loop-steps li.is-reached { opacity: 1; }
+
+.loop-steps li.is-current { color: var(--text); }
+
+.loop-steps li .n {
+  width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center;
+  font: 600 12px var(--mono);
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+
+.loop-steps li.is-reached .n { background: var(--orange-dim); color: var(--text); }
+.loop-steps li.is-current .n { background: var(--orange); color: #241C14; }
+.loop-steps li.is-verdict.is-reached .n { background: var(--red); color: #241310; }
+
+.loop-steps li b { color: var(--text); font-weight: 600; }
+
+.loop-tests { display: flex; flex-direction: column; gap: 6px; min-height: 340px; }
+
+.cand {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 9px 14px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font: 13px var(--mono);
+  color: var(--text-dim);
+  transition: opacity 260ms ease-out, transform 260ms ease-out, color 200ms ease-out,
+    background 200ms ease-out;
+}
+
+.cand .mark { text-align: center; color: var(--text-dim); }
+
+.cand .name { overflow-wrap: anywhere; }
+
+.cand .note { font-size: 11.5px; color: var(--text-dim); }
+
+.cand.is-new { background: #231C14; color: var(--text); }
+.cand.is-pass { color: var(--text); }
+.cand.is-pass .mark { color: var(--green); }
+.cand.is-discarded { color: var(--text-dim); }
+.cand.is-discarded .name { text-decoration: line-through; }
+.cand.is-discarded .mark { color: var(--red); }
+.cand.is-falling { opacity: 0; transform: translateY(14px); }
+.cand.is-gone { display: none; }
+.cand.is-fail {
+  background: #221310;
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--red);
+}
+.cand.is-fail .mark { color: var(--red); }
+
+.loop-metrics {
+  display: flex;
+  gap: 26px;
+  flex-wrap: wrap;
+  margin: 18px 0 0;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+.loop-metrics div { display: flex; flex-direction: column; gap: 2px; }
+
+.loop-metrics dd, .loop-metrics .v {
+  margin: 0;
+  font-size: 21px;
+  font-variant-numeric: tabular-nums;
+}
+
+.loop-metrics .l {
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.loop-caption { margin: 14px 0 0; font-size: 13.5px; color: var(--text-dim); max-width: 78ch; }
+
+@media (max-width: 1080px) {
+  .loop { grid-template-columns: 1fr; gap: 20px; }
+  .pr-grid { grid-template-columns: 1fr; }
+}
+
 /* ------------------------------------------------------------------ footer */
 
 .footer { margin-top: 56px; padding-top: 26px; border-top: 1px solid var(--line); }
@@ -708,12 +1057,34 @@ table.plain td.v { color: var(--text-dim); }
     <div class="flags" id="flags"></div>
   </section>
 
+  <section class="zone" id="zone-loop">
+    <div class="zone-head">
+      <div>
+        <span class="kicker">The validation loop</span>
+        <h2>Generated tests are not trusted. They are executed.</h2>
+      </div>
+      <div class="map-controls">
+        <button class="chip" id="loop-play" aria-pressed="false">
+          <span class="dot"></span><span id="loop-play-label">Play the loop</span>
+        </button>
+      </div>
+    </div>
+    <p class="zone-note wide">A characterization test records what the code does today.
+    A generated one might instead record what the model imagined it does — so every
+    candidate is run against <b>base</b> first, and <b>the ones that fail on base are
+    discarded and never reported</b>. Only survivors are allowed to say anything about
+    head.</p>
+    <div id="loop"></div>
+  </section>
+
   <section class="zone" id="zone-prs">
     <div class="zone-head">
       <div>
         <span class="kicker">Zone 3 · Analysed pull requests</span>
-        <h2>Runs on this repository</h2>
+        <h2>Newest first, with what each run observed</h2>
       </div>
+      <p class="zone-note">Open one for the structural account of the change, the
+      sandbox runs it produced, and its flags.</p>
     </div>
     <div id="prs"></div>
   </section>
@@ -812,10 +1183,10 @@ function renderMasthead() {
   const rows = [
     ["Flags", String(counts.findings), null, null],
     ["Behaviour changes", String(behaviour), null, null],
-    ["Citing a repo standard", String(counts.cited), " of " + counts.findings, null],
-    ["Pull requests analysed", String((DATA.prs || []).length), null, null],
-    ["Sandbox runs recorded", String((DATA.runs || []).length), null, null],
-    ["Generated tests discarded on base", discard, null, null],
+    ["Citing a standard", String(counts.cited), " of " + counts.findings, null],
+    ["Pull requests", String((DATA.prs || []).length), null, null],
+    ["Sandbox runs", String((DATA.runs || []).length), null, null],
+    ["Discarded on base", discard, null, null],
   ];
   const list = $("#topline");
   list.innerHTML = "";
@@ -833,7 +1204,7 @@ function renderMasthead() {
    spec draws it; narrow is the same graph as a single column. */
 const WIDE = {
   width: 1320,
-  height: 486,
+  height: 470,
   box: {w: 172, h: 64},
   at: {
     pr: [40, 32, 132, 64],
@@ -859,7 +1230,7 @@ const NARROW = {
   height: 1112,
   box: {w: 286, h: 60},
   at: {
-    pr: [67, 8, 286, 52],
+    pr: [67, 8, 286, 60],
     c2: [67, 84],
     c3: [67, 160],
     c1base: [67, 236],
@@ -1212,10 +1583,9 @@ function renderLegend() {
     ran +
     " of " +
     nodes.length +
-    " components ran in this pass. " +
-    (broken.length
-      ? broken.map((node) => node.component + " " + node.label.toLowerCase() + ": " + node.detail).join("; ")
-      : "Click a node to filter the flags below; click a flag to light the node that produced it.");
+    " components ran in this pass" +
+    (broken.length ? ", " + broken.length + " could not" : "") +
+    ". Click a node to filter the flags below; click a flag to light the node that produced it.";
 }
 
 /* The replay is the recorded order and the recorded durations, compressed to a fixed
@@ -1459,7 +1829,7 @@ function whereLine(finding) {
   }
   if (finding.run) {
     const run = runById(finding.run);
-    if (run) bits.push(el("span", {class: "pill " + run.outcome, text: run.outcome}));
+    if (run) bits.push(el("span", {class: "pill " + run.outcome, text: "run " + run.outcome}));
   }
   bits.forEach((bit, index) => {
     if (index) line.appendChild(el("span", {class: "sep", text: "/"}));
@@ -1551,6 +1921,18 @@ function flagBody(finding) {
 
   const run = runById(finding.run);
   const pr = prById(finding.pr);
+  if (run && finding.log_line !== null && finding.log_line !== undefined) {
+    const jump = el("button", {
+      class: "tab",
+      style: "margin-top:12px",
+      text: "Open the run log at the line that failed",
+    });
+    jump.addEventListener("click", () => {
+      const card = $("#pr-" + finding.pr);
+      if (card && card.openRunAtLine) card.openRunAtLine(finding.run, finding.log_line);
+    });
+    evidence.appendChild(jump);
+  }
   const facts = el("dl", {class: "facts"});
   facts.append(
     fact("Produced by", NODE_LABEL[finding.node] || finding.node),
@@ -1640,43 +2022,830 @@ function renderFlags() {
   findings.forEach((finding) => host.appendChild(flagCard(finding)));
 }
 
+/* ------------------------------------------------------------ sandbox replay */
+
+const FAILURE = /^(FAILED|ERROR)\b|^E\s{2,}|^_{2,}\s|AssertionError|Traceback|\bfailed\b/;
+
+function isFailureLine(text) {
+  return FAILURE.test(text);
+}
+
+function clock(seconds) {
+  const s = Math.max(0, seconds);
+  const whole = Math.floor(s);
+  const hundredths = Math.floor((s - whole) * 100);
+  return (
+    String(Math.floor(whole / 60)).padStart(2, "0") +
+    ":" +
+    String(whole % 60).padStart(2, "0") +
+    "." +
+    String(hundredths).padStart(2, "0")
+  );
+}
+
+/* One run, two ways to read it: replayed at the pace it happened, or all of it at once.
+   The replay is driven by the recorded arrival time of each line, so pausing it stops
+   the run where the container really was at that moment. */
+function runView(run) {
+  const lines = run.lines || [];
+  const duration = lines.length ? lines[lines.length - 1].t : run.wall_s;
+  const firstFailure = lines.findIndex((line) => isFailureLine(line.text));
+
+  const view = el("div", {class: "run", id: "run-" + run.id});
+  view.appendChild(
+    el("div", {class: "run-head"}, [
+      el("h5", {}, [
+        run.label,
+        " ",
+        el("span", {class: "pill " + run.outcome, text: run.outcome}),
+      ]),
+      el("span", {
+        class: "meta",
+        text:
+          "exit " +
+          run.exit_code +
+          " · " +
+          run.wall_s +
+          "s wall · " +
+          run.tests_total +
+          " tests, " +
+          run.tests_failed +
+          " failed" +
+          (run.tests_skipped ? ", " + run.tests_skipped + " skipped" : ""),
+      }),
+    ])
+  );
+
+  const facts = el("dl", {class: "container-facts"});
+  [
+    ["Image", run.image ? run.image.split(":")[1].slice(0, 12) : "—"],
+    ["Command", (run.command || []).slice(0, 2).join(" ")],
+    ["Memory cap", run.memory_mb + " MB"],
+    ["Timeout", run.timeout_s + "s"],
+    ["Network", "none"],
+    ["Root fs", "read-only"],
+    ["User", run.user],
+    ["Capabilities", run.capabilities],
+    ["PIDs", String(run.pids_limit)],
+    ["CPUs", String(run.cpus)],
+    ["Commit", (run.commit || "").slice(0, 10)],
+  ].forEach(([label, value]) => facts.appendChild(fact(label, value)));
+  view.appendChild(facts);
+
+  const tabs = el("div", {class: "tabs"});
+  const replayTab = el("button", {class: "tab", "aria-pressed": "true", text: "Replay"});
+  const logTab = el("button", {class: "tab", "aria-pressed": "false", text: "Full log"});
+  const anchorBtn = el("button", {
+    class: "tab",
+    text: firstFailure >= 0 ? "Jump to the failure" : "No failing line in this run",
+    disabled: firstFailure < 0,
+  });
+  tabs.append(replayTab, logTab);
+  view.appendChild(tabs);
+
+  const transport = el("div", {class: "transport"});
+  const playBtn = el("button", {class: "primary", text: "Play"});
+  const speedSel = el("select", {class: "speed", "aria-label": "Replay speed"});
+  [0.5, 1, 2, 4, 8, 16].forEach((rate) =>
+    speedSel.appendChild(el("option", {value: String(rate), text: rate + "×", selected: rate === 1}))
+  );
+  const scrub = el("input", {
+    type: "range",
+    min: "0",
+    max: String(Math.max(duration, 0.01)),
+    step: "0.01",
+    value: "0",
+    "aria-label": "Scrub the run",
+  });
+  const readout = el("span", {class: "clock", text: clock(0) + " / " + clock(duration)});
+  transport.append(playBtn, speedSel, scrub, readout, anchorBtn);
+
+  const search = el("div", {class: "transport", hidden: true});
+  const searchBox = el("input", {type: "search", placeholder: "Search the log", "aria-label": "Search the log"});
+  const matches = el("span", {class: "clock", text: lines.length + " lines"});
+  const anchorBtn2 = el("button", {
+    class: "tab",
+    text: firstFailure >= 0 ? "Jump to the failure" : "No failing line",
+    disabled: firstFailure < 0,
+  });
+  search.append(searchBox, matches, anchorBtn2);
+
+  view.append(transport, search);
+
+  const log = el("div", {class: "log", tabindex: "0", role: "log"});
+  view.appendChild(log);
+
+  if (!lines.length) {
+    log.appendChild(
+      el("p", {
+        class: "log-empty",
+        text:
+          "This run produced no output before it ended — which is itself the finding: " +
+          "the container was stopped at " +
+          run.wall_s +
+          "s with exit " +
+          run.exit_code +
+          ".",
+      })
+    );
+  }
+
+  let mode = "replay";
+  let playhead = 0;
+  let rendered = 0;
+  let playing = false;
+  let frame = null;
+  let last = 0;
+
+  function row(line, index) {
+    const failed = isFailureLine(line.text);
+    return el(
+      "span",
+      {
+        class: "row" + (failed ? " is-fail" : "") + (line.omitted ? " is-omitted" : ""),
+        id: "run-" + run.id + "-l" + index,
+      },
+      [el("span", {class: "t", text: clock(line.t)}), el("span", {class: "v", text: line.text})]
+    );
+  }
+
+  function renderUpTo(seconds) {
+    if (!lines.length) return;
+    let index = 0;
+    while (index < lines.length && lines[index].t <= seconds) index += 1;
+    if (index < rendered) {
+      log.innerHTML = "";
+      rendered = 0;
+    }
+    if (index && !rendered) log.innerHTML = "";
+    for (let i = rendered; i < index; i += 1) log.appendChild(row(lines[i], i));
+    if (index > rendered) log.scrollTop = log.scrollHeight;
+    rendered = index;
+    if (!index) {
+      log.innerHTML = "";
+      log.appendChild(
+        el("p", {
+          class: "log-empty",
+          text:
+            lines.length +
+            " lines were recorded over " +
+            duration.toFixed(2) +
+            "s. Press play to watch them arrive at the pace they really did, or scrub to a moment.",
+        })
+      );
+    }
+    readout.textContent = clock(seconds) + " / " + clock(duration);
+    scrub.value = String(Math.min(seconds, duration));
+  }
+
+  function tick(now) {
+    if (!playing) return;
+    const delta = (now - last) / 1000;
+    last = now;
+    playhead = Math.min(duration, playhead + delta * Number(speedSel.value));
+    renderUpTo(playhead);
+    if (playhead >= duration) {
+      pause();
+      return;
+    }
+    frame = requestAnimationFrame(tick);
+  }
+
+  function play() {
+    if (!lines.length) return;
+    if (playhead >= duration) {
+      playhead = 0;
+      log.innerHTML = "";
+      rendered = 0;
+    }
+    playing = true;
+    playBtn.textContent = "Pause";
+    last = performance.now();
+    frame = requestAnimationFrame(tick);
+  }
+
+  function pause() {
+    playing = false;
+    playBtn.textContent = playhead >= duration ? "Replay" : "Play";
+    if (frame) cancelAnimationFrame(frame);
+    frame = null;
+  }
+
+  function showAll(highlightIndex) {
+    log.innerHTML = "";
+    lines.forEach((line, index) => log.appendChild(row(line, index)));
+    rendered = lines.length;
+    applySearch();
+    if (highlightIndex !== undefined && highlightIndex >= 0) {
+      const target = log.querySelector("#run-" + run.id + "-l" + highlightIndex);
+      if (target) {
+        target.classList.add("is-anchor");
+        log.scrollTop = Math.max(0, target.offsetTop - log.clientHeight / 2);
+      }
+    }
+  }
+
+  function applySearch() {
+    const term = searchBox.value.trim().toLowerCase();
+    let hits = 0;
+    let first = null;
+    log.querySelectorAll(".row").forEach((node) => {
+      const hit = Boolean(term) && node.textContent.toLowerCase().includes(term);
+      node.classList.toggle("is-hit", hit);
+      if (hit) {
+        hits += 1;
+        if (!first) first = node;
+      }
+    });
+    matches.textContent = term ? hits + " of " + lines.length + " lines" : lines.length + " lines";
+    if (first) log.scrollTop = Math.max(0, first.offsetTop - log.clientHeight / 2);
+  }
+
+  function setMode(next, highlightIndex) {
+    mode = next;
+    replayTab.setAttribute("aria-pressed", String(mode === "replay"));
+    logTab.setAttribute("aria-pressed", String(mode === "log"));
+    transport.hidden = mode !== "replay";
+    search.hidden = mode !== "log";
+    pause();
+    if (mode === "log") showAll(highlightIndex);
+    else {
+      log.innerHTML = "";
+      rendered = 0;
+      renderUpTo(playhead);
+    }
+  }
+
+  playBtn.addEventListener("click", () => (playing ? pause() : play()));
+  scrub.addEventListener("input", () => {
+    pause();
+    playhead = Number(scrub.value);
+    renderUpTo(playhead);
+  });
+  searchBox.addEventListener("input", applySearch);
+  replayTab.addEventListener("click", () => setMode("replay"));
+  logTab.addEventListener("click", () => setMode("log"));
+  anchorBtn2.addEventListener("click", () => showAll(firstFailure));
+  anchorBtn.addEventListener("click", () => {
+    if (firstFailure < 0) return;
+    if (mode === "replay") {
+      pause();
+      playhead = lines[firstFailure].t;
+      log.innerHTML = "";
+      rendered = 0;
+      renderUpTo(playhead);
+      const target = log.querySelector("#run-" + run.id + "-l" + firstFailure);
+      if (target) {
+        target.classList.add("is-anchor");
+        log.scrollTop = Math.max(0, target.offsetTop - log.clientHeight / 2);
+      }
+    } else {
+      showAll(firstFailure);
+    }
+  });
+
+  renderUpTo(0);
+  view.openAtLine = (index) => setMode("log", index);
+  return view;
+}
+
 /* ---------------------------------------------------------------------- prs */
+
+function severityDots(pr) {
+  const findings = (DATA.findings || []).filter((finding) => (pr.finding_ids || []).includes(finding.id));
+  const buckets = {"sev-1": 0, "sev-08": 0, "sev-05": 0, "sev-03": 0};
+  findings.forEach((finding) => {
+    buckets[severityClass(finding.severity)] += 1;
+  });
+  const wrap = el("span", {
+    class: "sev-dots",
+    title: Object.keys(buckets)
+      .filter((key) => buckets[key])
+      .map((key) => buckets[key] + " at severity " + {"sev-1": "1.0", "sev-08": "0.8", "sev-05": "0.5", "sev-03": "0.3"}[key])
+      .join(", "),
+  });
+  Object.keys(buckets).forEach((key) => {
+    for (let i = 0; i < Math.min(buckets[key], 6); i += 1) wrap.appendChild(el("i", {class: key}));
+  });
+  wrap.appendChild(el("em", {text: findings.length + " flag" + (findings.length === 1 ? "" : "s")}));
+  return wrap;
+}
+
+/* One dot per recorded run rather than a single worst-case word: a pass, a timeout and
+   an OOM in the same pass are three facts, and collapsing them into "failed" would read
+   as a verdict on the pull request. */
+function runOutcomes(runs) {
+  if (!runs.length) return el("span", {class: "pill", text: "no run recorded"});
+  const tally = {};
+  runs.forEach((run) => {
+    tally[run.outcome] = (tally[run.outcome] || 0) + 1;
+  });
+  const wrap = el("span", {
+    class: "sev-dots",
+    title: Object.keys(tally)
+      .map((outcome) => tally[outcome] + " × " + outcome)
+      .join(", "),
+  });
+  runs.forEach((run) => {
+    wrap.appendChild(
+      el("i", {class: run.outcome === "passed" ? "ok" : "bad", title: run.label + ": " + run.outcome})
+    );
+  });
+  wrap.appendChild(el("em", {text: runs.length + " run" + (runs.length === 1 ? "" : "s")}));
+  return wrap;
+}
 
 function renderPrs() {
   const host = $("#prs");
   host.innerHTML = "";
   const prs = DATA.prs || [];
   if (!prs.length) {
-    host.appendChild(el("p", {class: "empty", text: "No pull requests have been analysed in this run."}));
+    host.appendChild(
+      el("p", {
+        class: "empty",
+        text: "No pull requests were analysed in this run, so there is nothing here to read.",
+      })
+    );
     return;
   }
-  const table = el("table", {class: "plain"});
-  prs.forEach((pr) => {
-    table.appendChild(
-      el("tr", {}, [
-        el("td", {class: "k", text: "#" + pr.number}),
-        el("td", {class: "v"}, [
-          el("div", {text: pr.title}),
-          el("div", {
-            class: "mono",
-            style: "font-size:12.5px;color:var(--text-dim);margin-top:3px",
-            text:
-              pr.author +
-              " · " +
-              (pr.merged_at || "").slice(0, 10) +
-              " · +" +
-              pr.insertions +
-              "/-" +
-              pr.deletions +
-              " · " +
-              pr.finding_ids.length +
-              " flag(s)",
-          }),
-        ]),
+  const list = el("div", {class: "pr-list"});
+  prs.forEach((pr) => list.appendChild(prRow(pr)));
+  host.appendChild(list);
+}
+
+function prRow(pr) {
+  const card = el("article", {class: "pr", id: "pr-" + pr.number});
+  const runs = (DATA.runs || []).filter((run) => (pr.run_ids || []).includes(run.id));
+  const worst = runs.find((run) => run.outcome !== "passed");
+  const row = el("button", {class: "pr-row", "aria-expanded": "false"}, [
+    el("span", {class: "caret"}, [caretIcon()]),
+    el("span", {class: "num-cell", text: "#" + pr.number}),
+    el("span", {class: "title"}, [
+      el("b", {text: pr.title}),
+      el("span", {
+        text:
+          pr.author +
+          "  ·  " +
+          (pr.merged_at || "").slice(0, 10) +
+          "  ·  " +
+          pr.head.slice(0, 10) +
+          "  ·  +" +
+          pr.insertions +
+          "/−" +
+          pr.deletions +
+          " over " +
+          (pr.files_changed || []).length +
+          " files",
+      }),
+    ]),
+    severityDots(pr),
+    runOutcomes(runs),
+  ]);
+
+  const body = el("div", {class: "pr-body"});
+  let built = false;
+  row.addEventListener("click", () => {
+    const open = !card.classList.contains("is-open");
+    card.classList.toggle("is-open", open);
+    row.setAttribute("aria-expanded", String(open));
+    if (open && !built) {
+      built = true;
+      buildPrBody(body, pr, runs);
+    }
+  });
+  card.append(row, body);
+  card.openRunAtLine = (runId, lineIndex) => {
+    if (!card.classList.contains("is-open")) row.click();
+    const view = body.querySelector("#run-" + runId);
+    if (view && view.openAtLine) {
+      view.openAtLine(lineIndex);
+      view.scrollIntoView({block: "center"});
+    }
+  };
+  return card;
+}
+
+function buildPrBody(body, pr, runs) {
+  const grid = el("div", {class: "pr-grid"});
+
+  // 1. the structural account: counts and names, no prose summary of intent
+  const account = el("div", {class: "panel"}, [el("h4", {text: "What this change touches"})]);
+  const changed = pr.changed_symbols || [];
+  const callers = pr.callers || [];
+  const sentence = el("p", {class: "account"});
+  sentence.append(
+    el("span", {class: "n", text: "+" + pr.insertions}),
+    " added and ",
+    el("span", {class: "n", text: "−" + pr.deletions}),
+    " removed across ",
+    el("span", {class: "n", text: String((pr.files_changed || []).length)}),
+    " files. ",
+    el("span", {class: "n", text: String(changed.length)}),
+    " symbol" + (changed.length === 1 ? "" : "s") + " overlap the changed lines; the call graph reaches ",
+    el("span", {class: "n", text: String(callers.length)}),
+    " more within " + pr.hops + " hops."
+  );
+  account.appendChild(sentence);
+
+  const files = el("ul", {class: "sym-list"});
+  (pr.files_changed || []).slice(0, 12).forEach((file) => {
+    files.appendChild(
+      el("li", {}, [
+        el("b", {text: file.path}),
+        " ",
+        el("i", {text: "+" + file.insertions + "/−" + file.deletions}),
       ])
     );
   });
-  host.appendChild(table);
+  if ((pr.files_changed || []).length > 12) {
+    files.appendChild(el("li", {text: "+" + ((pr.files_changed || []).length - 12) + " more files"}));
+  }
+  account.appendChild(files);
+
+  const symbols = el("ul", {class: "sym-list"});
+  changed.slice(0, 14).forEach((symbol) => {
+    symbols.appendChild(
+      el("li", {}, [
+        el("b", {text: symbol.fqn}),
+        " ",
+        el("i", {text: symbol.kind + " · " + symbol.file + ":" + symbol.line_start}),
+      ])
+    );
+  });
+  if (changed.length > 14) {
+    symbols.appendChild(el("li", {text: "+" + (changed.length - 14) + " more changed symbols"}));
+  }
+  if (changed.length) {
+    account.appendChild(el("h4", {text: "Changed symbols", style: "margin-top:16px"}));
+    account.appendChild(symbols);
+  }
+  grid.appendChild(account);
+
+  // 2. the blast radius, drawn from the real call edges
+  const blast = el("div", {class: "panel"}, [el("h4", {text: "Blast radius, traced outward"})]);
+  const drawing = blastRadius(pr);
+  if (drawing) {
+    blast.appendChild(drawing);
+    blast.appendChild(
+      el("p", {
+        class: "loop-caption",
+        text:
+          "Each edge is a call the graph resolved, not an illustration. Callers are why a " +
+          "change to a private symbol still reaches the public surface.",
+      })
+    );
+  } else {
+    blast.appendChild(
+      el("p", {
+        class: "loop-caption",
+        text:
+          "No call edges inside this radius: the changed symbols have no callers the graph " +
+          "could resolve within " + pr.hops + " hops.",
+      })
+    );
+  }
+  grid.appendChild(blast);
+  body.appendChild(grid);
+
+  // 3. the runs
+  if (runs.length) {
+    const panel = el("div", {class: "panel", style: "margin-top:24px"}, [
+      el("h4", {text: "Sandbox runs, replayable"}),
+    ]);
+    runs.forEach((run) => panel.appendChild(runView(run)));
+    body.appendChild(panel);
+  }
+
+  // 4. its flags, which live in zone 2 — link rather than duplicate
+  const mine = (DATA.findings || []).filter((finding) => (pr.finding_ids || []).includes(finding.id));
+  const flags = el("div", {class: "panel", style: "margin-top:24px"}, [
+    el("h4", {text: "Flags from this pull request"}),
+  ]);
+  if (!mine.length) {
+    flags.appendChild(
+      el("p", {
+        class: "loop-caption",
+        text:
+          "No flags from this pull request. That is not an approval: it means the probes that " +
+          "ran measured no change they could cite a standard for.",
+      })
+    );
+  } else {
+    const list = el("ul", {class: "sym-list", style: "max-height:none"});
+    mine.forEach((finding) => {
+      const link = el("button", {
+        class: "tab",
+        style: "font-family:var(--mono);font-size:12.5px",
+        text: (KIND_LABEL[finding.kind] || finding.kind) + " · " + finding.symbol,
+      });
+      link.addEventListener("click", () => openFlag(finding.id));
+      list.appendChild(el("li", {}, [link]));
+    });
+    flags.appendChild(list);
+  }
+  body.appendChild(flags);
+}
+
+/* The blast radius as the traversal that produced it: changed symbols on the left,
+   the callers the graph reached on the right, one edge per resolved call. */
+function blastRadius(pr) {
+  const changed = (pr.changed_symbols || []).map((symbol) => symbol.fqn);
+  const edges = (pr.edges || []).filter(([caller, callee]) => changed.includes(callee) && caller !== callee);
+  if (!edges.length) return null;
+
+  const shownChanged = [];
+  const shownCallers = [];
+  const pairs = [];
+  edges.forEach(([caller, callee]) => {
+    if (shownChanged.indexOf(callee) === -1) {
+      if (shownChanged.length >= 5) return;
+      shownChanged.push(callee);
+    }
+    if (shownCallers.indexOf(caller) === -1) {
+      if (shownCallers.length >= 9) return;
+      shownCallers.push(caller);
+    }
+    pairs.push([caller, callee]);
+  });
+  if (!pairs.length) return null;
+
+  const rowH = 30;
+  const height = Math.max(shownChanged.length, shownCallers.length) * rowH + 30;
+  const node = document.createElementNS(SVG_NS, "svg");
+  node.setAttribute("viewBox", "0 0 640 " + height);
+  node.setAttribute("id", "blast");
+  node.setAttribute("role", "img");
+  node.setAttribute(
+    "aria-label",
+    pairs.length + " resolved call edges from " + shownCallers.length + " callers into " + shownChanged.length + " changed symbols"
+  );
+
+  const yFor = (list, name) => 26 + list.indexOf(name) * rowH;
+  pairs.forEach(([caller, callee], index) => {
+    const y1 = yFor(shownCallers, caller) + 10;
+    const y2 = yFor(shownChanged, callee) + 10;
+    node.appendChild(
+      svg("path", {
+        class: "blast-edge is-traced",
+        d: `M 376 ${y1} C 320 ${y1}, 300 ${y2}, 244 ${y2}`,
+        style: "animation-delay:" + index * 45 + "ms",
+      })
+    );
+  });
+
+  shownChanged.forEach((name) => {
+    const y = yFor(shownChanged, name);
+    node.appendChild(
+      svg("rect", {class: "blast-node is-changed", x: 4, y: y, width: 240, height: 20, rx: 5})
+    );
+    node.appendChild(
+      svg("text", {class: "blast-label is-changed", x: 12, y: y + 14, text: shortFqn(name, 32)})
+    );
+  });
+  shownCallers.forEach((name) => {
+    const y = yFor(shownCallers, name);
+    node.appendChild(svg("rect", {class: "blast-node", x: 376, y: y, width: 258, height: 20, rx: 5}));
+    node.appendChild(svg("text", {class: "blast-label", x: 384, y: y + 14, text: shortFqn(name, 34)}));
+  });
+  return node;
+}
+
+function shortFqn(fqn, room) {
+  if (fqn.length <= room) return fqn;
+  const parts = fqn.split(".");
+  const tail = parts.slice(-2).join(".");
+  return tail.length <= room ? "…" + tail : "…" + tail.slice(tail.length - room + 1);
+}
+
+function openFlag(id) {
+  const finding = (DATA.findings || []).find((item) => item.id === id);
+  if (!finding) return;
+  state.node = null;
+  state.kinds.clear();
+  state.openFlags.add(id);
+  renderFilters();
+  renderFlags();
+  renderMap();
+  const card = $("#flag-" + id);
+  if (card) {
+    card.scrollIntoView({block: "center"});
+    highlightNode(finding.node);
+  }
+}
+
+/* ------------------------------------------------------------ validation loop */
+
+function renderLoop() {
+  const host = $("#loop");
+  host.innerHTML = "";
+  const round = (DATA.validation || [])[0];
+  if (!round) {
+    host.appendChild(
+      el("p", {
+        class: "empty",
+        text:
+          "No characterization ran in this pass, so there is no loop to show. Without it, " +
+          "nothing here reports a behaviour change: the probes measured structure only.",
+      })
+    );
+    $("#loop-play").hidden = true;
+    return;
+  }
+
+  const generated = round.generated || [];
+  const discarded = (round.base_failed || []).map((row) => row.name);
+  const survivors = round.survivors || [];
+  const headFailed = (round.head_failed || []).map((row) => row.name);
+  const regenerated = survivors.filter((name) => generated.indexOf(name) === -1);
+  const seen = generated.length + regenerated.length;
+
+  const steps = [
+    ["Generate", generated.length + " candidate tests for " + round.symbol, false],
+    ["Run on base", "all " + generated.length + " executed in a container at base", false],
+    [
+      "Discard",
+      discarded.length + " failed on base — the generator imagined that behaviour",
+      false,
+    ],
+    [
+      "Regenerate",
+      regenerated.length + " rewritten with the real failure output fed back",
+      false,
+    ],
+    ["Run on head", survivors.length + " survivors executed at head", false],
+    [
+      "The finding",
+      headFailed.length + " passed on base and failed on head",
+      true,
+    ],
+  ];
+
+  const list = el("ol", {class: "loop-steps"});
+  steps.forEach(([label, detail, verdict], index) => {
+    list.appendChild(
+      el("li", {class: "step" + (verdict ? " is-verdict" : ""), "data-step": index}, [
+        el("span", {class: "n", text: String(index + 1)}),
+        el("span", {}, [el("b", {text: label}), document.createTextNode(" — " + detail)]),
+      ])
+    );
+  });
+
+  const tests = el("div", {class: "loop-tests"});
+  const rows = {};
+  generated.concat(regenerated).forEach((name) => {
+    const isRegen = regenerated.indexOf(name) !== -1;
+    const row = el("div", {class: "cand", "data-name": name, "data-regen": isRegen ? "true" : null}, [
+      el("span", {class: "mark", text: "·"}),
+      el("span", {class: "name", text: name}),
+      el("span", {class: "note", text: isRegen ? "regenerated" : "candidate"}),
+    ]);
+    rows[name] = row;
+    tests.appendChild(row);
+  });
+
+  const panel = el("div", {class: "loop"}, [list, tests]);
+  host.appendChild(panel);
+
+  const metrics = el("div", {class: "loop-metrics"});
+  [
+    [Math.round(round.discard_rate * 100) + "%", "discard rate, measured"],
+    [discarded.length + " of " + seen, "candidates discarded on base"],
+    [String(survivors.length), "survivors allowed to test head"],
+    [String(headFailed.length), "flagged as a behaviour change"],
+    [(round.duration_s || 0) + "s", "container time, base and head"],
+  ].forEach(([value, label]) => {
+    metrics.appendChild(
+      el("div", {}, [el("span", {class: "v", text: value}), el("span", {class: "l", text: label})])
+    );
+  });
+  host.appendChild(metrics);
+
+  host.appendChild(
+    el("p", {class: "loop-caption"}, [
+      "Tests that fail on base are discarded, never reported — that is what the ",
+      el("b", {text: Math.round(round.discard_rate * 100) + "% discard rate"}),
+      " counts. The " +
+        headFailed.length +
+        " that survived base and then failed on head is the only thing this loop reports, and it " +
+        "cites the nodeid and assertion diff from the run you can replay above.",
+      round.head_run
+        ? (() => {
+            const link = el("button", {class: "tab", style: "margin-left:8px", text: "Open the head run"});
+            link.addEventListener("click", () => {
+              const finding = (DATA.findings || []).find((item) => item.run === round.head_run);
+              if (finding) openFlag(finding.id);
+            });
+            return link;
+          })()
+        : null,
+    ])
+  );
+
+  function apply(stage, full) {
+    list.querySelectorAll("li").forEach((li, index) => {
+      li.classList.toggle("is-reached", index <= stage);
+      li.classList.toggle("is-current", index === stage);
+    });
+    Object.keys(rows).forEach((name) => {
+      const row = rows[name];
+      const isRegen = row.getAttribute("data-regen") === "true";
+      row.classList.remove("is-pass", "is-discarded", "is-falling", "is-gone", "is-fail", "is-new");
+      const mark = row.querySelector(".mark");
+      const note = row.querySelector(".note");
+      if (isRegen) {
+        if (stage < 3 && !full) {
+          row.classList.add("is-gone");
+          return;
+        }
+        row.classList.add("is-new");
+        note.textContent = "regenerated from the real failure";
+      }
+      if (stage === 0) {
+        mark.textContent = "·";
+        if (!isRegen) note.textContent = "candidate";
+        return;
+      }
+      const failedBase = discarded.indexOf(name) !== -1;
+      if (stage === 1) {
+        mark.textContent = "·";
+        note.textContent = "running on base";
+        return;
+      }
+      if (failedBase) {
+        row.classList.add("is-discarded");
+        mark.textContent = "×";
+        note.textContent = "failed on base — discarded, never reported";
+        if (stage >= 3 && !full) row.classList.add("is-gone");
+        return;
+      }
+      if (stage === 2 || stage === 3) {
+        row.classList.add("is-pass");
+        mark.textContent = "✓";
+        if (!isRegen) note.textContent = "passed on base";
+        return;
+      }
+      if (stage === 4) {
+        row.classList.add("is-pass");
+        mark.textContent = "✓";
+        note.textContent = "running on head";
+        return;
+      }
+      if (headFailed.indexOf(name) !== -1) {
+        row.classList.add("is-fail");
+        mark.textContent = "!";
+        note.textContent = "failed on head — reported";
+      } else {
+        row.classList.add("is-pass");
+        mark.textContent = "✓";
+        note.textContent = "unchanged at head";
+      }
+    });
+  }
+
+  let timers = [];
+  let playing = false;
+  const button = $("#loop-play");
+  const label = $("#loop-play-label");
+
+  function stop() {
+    timers.forEach(clearTimeout);
+    timers = [];
+    playing = false;
+    button.setAttribute("aria-pressed", "false");
+    label.textContent = "Play the loop";
+  }
+
+  function start() {
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (reduce) {
+      apply(steps.length - 1, true);
+      return;
+    }
+    playing = true;
+    button.setAttribute("aria-pressed", "true");
+    label.textContent = "Stop";
+    apply(0);
+    steps.forEach((_, index) => {
+      if (!index) return;
+      timers.push(
+        setTimeout(() => {
+          if (index === 3) {
+            // The discarded rows fall away before the regenerated ones arrive.
+            Object.keys(rows).forEach((name) => {
+              if (discarded.indexOf(name) !== -1) rows[name].classList.add("is-falling");
+            });
+            setTimeout(() => apply(index), 280);
+            return;
+          }
+          apply(index);
+          if (index === steps.length - 1) stop();
+        }, index * 1100)
+      );
+    });
+  }
+
+  button.onclick = () => (playing ? (stop(), apply(steps.length - 1, true)) : start());
+  apply(steps.length - 1, true);
 }
 
 /* ------------------------------------------------------------------- footer */
@@ -1736,6 +2905,7 @@ renderMap();
 renderLegend();
 renderFilters();
 renderFlags();
+renderLoop();
 renderPrs();
 renderFooter();
 

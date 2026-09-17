@@ -26,7 +26,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from prflagger.analysis.blast import blast_radius, changed_symbols
+from prflagger.analysis.blast import blast_radius, changed_symbols, package_root_for
+from prflagger.analysis.callgraph import build_call_graph
 from prflagger.brain.norms import build_profile, declarative_norms
 from prflagger.brain.store import SqliteGraphStore
 from prflagger.characterize import generate as generate_module
@@ -306,8 +307,12 @@ def stub_generation() -> None:
     generate_module.complete = lambda prompt, **kw: "\n\n".join(CANDIDATES)  # type: ignore[assignment]
 
     def regenerate(prompt: str, **kw: Any) -> str:
+        # The real prompt carries the failing test first and the whole failure output
+        # after it, so match on the test only: the shared failure text mentions every
+        # candidate and would otherwise return the same replacement three times.
+        source = prompt.split("These tests failed against", 1)[0]
         for phrase, replacement in REGENERATIONS:
-            if phrase in prompt:
+            if phrase in source:
                 return replacement
         return ""
 
@@ -599,6 +604,26 @@ def locate(
     }
 
 
+def call_edges(tree: Path, radius: set[str]) -> tuple[tuple[str, str], ...]:
+    """The call graph restricted to the blast radius: caller -> callee, both in scope.
+
+    These are the edges `blast_radius` walked to reach the callers, so drawing them
+    draws the traversal that produced the radius rather than an illustration of one.
+    """
+    try:
+        graph = build_call_graph(package_root_for(tree))
+    except Exception:  # noqa: BLE001 - no graph is a missing picture, not a failed run
+        return ()
+    edges = [
+        (caller, callee)
+        for caller, callees in graph.items()
+        if caller in radius
+        for callee in sorted(callees)
+        if callee in radius
+    ]
+    return tuple(sorted(set(edges)))
+
+
 def collect(limit: int, *, skip_docker: bool) -> Collected:
     findings: list[Finding] = []
     links: dict[int, FindingLink] = {}
@@ -666,6 +691,7 @@ def collect(limit: int, *, skip_docker: bool) -> Collected:
 
         radius = list(radius_index.values())
         touched = {symbol.fqn for symbol in changed_symbols(tree, meta["base"], meta["head"])}
+        graph = call_edges(tree, set(radius_index))
         prs.append(
             PrRecord(
                 number=meta["number"],
@@ -679,6 +705,7 @@ def collect(limit: int, *, skip_docker: bool) -> Collected:
                 files_changed=meta["files_changed"],
                 changed_symbols=tuple(s for s in radius if s.fqn in touched),
                 callers=tuple(s for s in radius if s.fqn not in touched),
+                edges=graph,
                 insertions=meta["insertions"],
                 deletions=meta["deletions"],
                 finding_ids=tuple(ids),
@@ -721,6 +748,12 @@ def collect(limit: int, *, skip_docker: bool) -> Collected:
         )
         runs.extend(characterization_runs(meta))
         runs.extend(recorded_runs(meta))
+        sandbox_s = sum(
+            run.result.duration_s for run in runs if run.id.startswith("run-char-")
+        )
+        validation[-1] = ValidationRound(
+            **{**validation[-1].__dict__, "duration_s": round(sandbox_s, 2)}
+        )
         for pr in prs:
             if pr.number == meta["number"]:
                 prs[prs.index(pr)] = PrRecord(
@@ -739,6 +772,7 @@ def collect(limit: int, *, skip_docker: bool) -> Collected:
                     }
                 )
 
+    anchor_findings(findings, links, runs)
     nodes = pipeline_state(findings, runs, validation, skip_docker=skip_docker)
     provenance = [
         {
@@ -789,6 +823,28 @@ def collect(limit: int, *, skip_docker: bool) -> Collected:
     return Collected(findings, links, prs, runs, validation, nodes, provenance, history)
 
 
+def anchor_findings(
+    findings: list[Finding], links: dict[int, FindingLink], runs: list[SandboxRun]
+) -> None:
+    """Point each behavioural finding at the log line that shows it failing.
+
+    The finding already cites the nodeid; this is the same citation as a coordinate, so
+    the interface can open the run at that line instead of asking the reader to search.
+    """
+    by_id = {run.id: run for run in runs}
+    for index, finding in enumerate(findings):
+        link = links.get(index)
+        if link is None or link.run is None or link.run not in by_id:
+            continue
+        nodeid = finding.how_we_know.splitlines()[0].strip()
+        if not nodeid:
+            continue
+        for position, (_, text) in enumerate(by_id[link.run].lines):
+            if nodeid in text and ("FAILED" in text or text.startswith("_")):
+                link.log_line = position
+                break
+
+
 def pipeline_state(
     findings: list[Finding],
     runs: list[SandboxRun],
@@ -814,34 +870,29 @@ def pipeline_state(
         return round(sum(matched), 1) if matched else None
 
     head_status = "complete"
-    head_detail = f"{survivors} survivor(s) run against head"
+    head_detail = f"{survivors} survivors on head"
     if timeout_run is not None and oom_run is not None:
-        head_detail += "; 1 timeout, 1 OOM recorded"
+        head_detail = f"{survivors} on head, +timeout, +OOM"
 
     return [
-        PipelineNode("pr", "complete", "base..head resolved from the merge's first parent"),
-        PipelineNode(
-            "c2",
-            "complete",
-            "changed symbols plus callers, 2 hops",
-            count=None,
-        ),
+        PipelineNode("pr", "complete", "base = the merge's first parent"),
+        PipelineNode("c2", "complete", "changed symbols + callers"),
         PipelineNode(
             "c3",
             "complete" if generated else "idle",
-            f"{generated} candidate test(s) replayed from a recorded generation",
+            "candidates, recorded generation",
             count=generated or None,
         ),
         PipelineNode(
             "c1base",
             "complete" if generated else "idle",
-            "candidates executed against base",
+            "executed against base",
             duration_s=run_seconds("run-char-base"),
         ),
         PipelineNode(
             "filter",
             "complete" if generated else "idle",
-            f"{discarded} discarded as imagined behaviour, {survivors} kept",
+            f"{discarded} discarded, {survivors} kept",
             count=discarded or None,
         ),
         PipelineNode(
@@ -859,25 +910,25 @@ def pipeline_state(
         PipelineNode(
             "c5",
             "failed",
-            "GitHub API unreachable from this machine: no review history harvested",
+            "GitHub API unreachable here",
         ),
-        PipelineNode("c6", "idle", "nothing to filter without harvested comments"),
-        PipelineNode("c7", "idle", "no clusters: mining needs harvested comments"),
+        PipelineNode("c6", "idle", "no comments to filter"),
+        PipelineNode("c7", "idle", "mining needs comments"),
         PipelineNode(
             "c8",
             "complete",
-            "declared standards only, with the pull requests that last changed them",
+            "declared standards only",
         ),
         PipelineNode(
             "c9",
             "complete" if not skip_docker else "idle",
-            f"{probe_count} observation(s) from api, coverage and lint probes",
+            f"{probe_count} observations: api, coverage, lint",
             count=probe_count or None,
         ),
         PipelineNode(
             "c10",
             "complete",
-            f"{len(findings)} finding(s) ranked",
+            f"{len(findings)} findings ranked",
             count=len(findings),
         ),
     ]
