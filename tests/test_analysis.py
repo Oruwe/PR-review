@@ -11,17 +11,15 @@ The toy repo is a real git repository built from the fixture — git is never mo
 
 from __future__ import annotations
 
-import shutil
 import subprocess
 import time
 from pathlib import Path
-
-import pytest
 
 from prflagger.analysis.blast import blast_radius, changed_symbols, package_root_for
 from prflagger.analysis.callgraph import build_call_graph, index_symbols
 from prflagger.analysis.diff import changed_ranges
 from prflagger.analysis.symbols import module_fqn_for, symbols_in_file
+from tests.conftest import git_in
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -30,40 +28,6 @@ EXPECTED_EDGES = {
     ("toypkg.top.a", "toypkg.middle.b"),
     ("toypkg.middle.b", "toypkg.leaf.c"),
 }
-
-
-def _git(repo: Path, *argv: str) -> None:
-    subprocess.run(["git", "-C", str(repo), *argv], check=True, capture_output=True)
-
-
-@pytest.fixture
-def toy_repo(tmp_path: Path) -> tuple[Path, str, str]:
-    """A real git repo whose head commit changes the body of `c()`."""
-    repo = tmp_path / "toy"
-    repo.mkdir()
-    shutil.copytree(FIXTURES / "toypkg", repo / "toypkg")
-
-    _git(repo, "init", "--quiet")
-    _git(repo, "config", "user.email", "test@example.com")
-    _git(repo, "config", "user.name", "Test")
-    _git(repo, "add", ".")
-    _git(repo, "commit", "--quiet", "-m", "base")
-    base = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
-
-    leaf = repo / "toypkg" / "leaf.py"
-    leaf.write_text(
-        leaf.read_text(encoding="utf-8").replace("doubled = value * 2", "doubled = value * 3"),
-        encoding="utf-8",
-    )
-    _git(repo, "commit", "--quiet", "-am", "change c()")
-    head = subprocess.run(
-        ["git", "-C", str(repo), "rev-parse", "HEAD"],
-        capture_output=True, text=True, check=True,
-    ).stdout.strip()
-    return repo, base, head
 
 
 # --------------------------------------------------------------------------------------
@@ -141,7 +105,7 @@ def test_changed_ranges_reports_head_side_lines(toy_repo: tuple[Path, str, str])
 def test_a_deleted_file_contributes_no_head_ranges(toy_repo: tuple[Path, str, str]) -> None:
     repo, base, _ = toy_repo
     (repo / "toypkg" / "unrelated.py").unlink()
-    _git(repo, "commit", "--quiet", "-am", "drop unrelated")
+    git_in(repo, "commit", "--quiet", "-am", "drop unrelated")
     head = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         capture_output=True, text=True, check=True,

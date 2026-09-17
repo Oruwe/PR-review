@@ -15,7 +15,24 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-__all__ = ["EMBED_MODEL", "Provider", "cache_dir", "complete", "embed", "usage_path"]
+__all__ = [
+    "EMBED_MODEL",
+    "EmbeddingUnavailable",
+    "Provider",
+    "cache_dir",
+    "complete",
+    "embed",
+    "embeddings_available",
+    "usage_path",
+]
+
+
+class EmbeddingUnavailable(RuntimeError):
+    """The local embedding model could not be loaded.
+
+    Raised rather than silently substituting a different vectoriser: a norm match
+    computed by some other algorithm is not the match this system claims to make.
+    """ 
 
 Provider = Callable[[str, int, float], str]  # prompt, max_tokens, temperature -> text
 
@@ -137,10 +154,24 @@ def _embed_model() -> Any:
     """Load the local embedding model once per process."""
     global _EMBED_MODEL_CACHE
     if _EMBED_MODEL_CACHE is None:
-        from sentence_transformers import SentenceTransformer
+        try:
+            from sentence_transformers import SentenceTransformer
 
-        _EMBED_MODEL_CACHE = SentenceTransformer(EMBED_MODEL)
+            _EMBED_MODEL_CACHE = SentenceTransformer(EMBED_MODEL)
+        except Exception as error:  # noqa: BLE001 - any load failure means unavailable
+            raise EmbeddingUnavailable(
+                f"could not load {EMBED_MODEL}: {error}"
+            ) from error
     return _EMBED_MODEL_CACHE
+
+
+def embeddings_available() -> bool:
+    """Whether `embed` can run. Callers use this to degrade explicitly."""
+    try:
+        _embed_model()
+    except EmbeddingUnavailable:
+        return False
+    return True
 
 
 def _key(payload: dict[str, Any]) -> str:
