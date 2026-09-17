@@ -1,0 +1,53 @@
+[
+  {
+    "number": 412,
+    "title": "Add retry helper",
+    "merged_at": "2026-03-04T10:00:00Z",
+    "user": "alice",
+    "review_comments": [
+      {"user": {"login": "bob"}, "body": "This needs a test in the same PR.",
+       "diff_hunk": "@@ -1 +1 @@", "created_at": "2026-03-02T09:00:00Z"},
+      {"user": {"login": "carol"}, "body": "Please add coverage for the new function.",
+       "diff_hunk": "@@ -2 +2 @@", "created_at": "2026-03-02T11:00:00Z"},
+      {"user": {"login": "dave"}, "body": "Nit: I would have named this differently.",
+       "diff_hunk": "@@ -3 +3 @@", "created_at": "2026-03-04T23:00:00Z"}
+    ],
+    "commits": [
+      {"commit": {"committer": {"date": "2026-03-01T08:00:00Z"}}},
+      {"commit": {"committer": {"date": "2026-03-03T12:00:00Z"}}}
+    ]
+  },
+  {
+    "number": 457,
+    "title": "Parser fix",
+    "merged_at": "2026-04-10T10:00:00Z",
+    "user": "erin",
+    "review_comments": [
+      {"user": {"login": "bob"}, "body": "New public functions need a test here too.",
+       "diff_hunk": "@@ -9 +9 @@", "created_at": "2026-04-08T09:00:00Z"}
+    ],
+    "commits": [{"commit": {"author": {"date": "2026-04-09T09:00:00Z"}}}]
+  },
+  {
+    "number": 500,
+    "title": "Abandoned experiment",
+    "merged_at": null,
+    "user": "frank",
+    "review_comments": [
+      {"user": {"login": "bob"}, "body": "This needs a test in the same PR.",
+       "diff_hunk": "@@ -1 +1 @@", "created_at": "2026-05-01T09:00:00Z"}
+    ],
+    "commits": [{"commit": {"committer": {"date": "2026-05-02T09:00:00Z"}}}]
+  },
+  {
+    "number": 501,
+    "title": "Merged but nothing followed the review",
+    "merged_at": "2026-05-20T10:00:00Z",
+    "user": "grace",
+    "review_comments": [
+      {"user": {"login": "carol"}, "body": "Consider renaming this later.",
+       "diff_hunk": "@@ -4 +4 @@", "created_at": "2026-05-19T09:00:00Z"}
+    ],
+    "commits": [{"commit": {"committer": {"date": "2026-05-18T09:00:00Z"}}}]
+  }
+]
