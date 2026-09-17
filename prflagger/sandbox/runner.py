@@ -59,10 +59,15 @@ _OUTER_GRACE_S = 30
 # runner, so without this a cached result outlives the flags that produced it.
 _INVOCATION_VERSION = 2
 
+# Bumped when the Dockerfile changes. The lockfile hash describes the repo's
+# dependencies, not our recipe, so without this a stale image would be reused.
+_IMAGE_RECIPE_VERSION = 2
+
 _DOCKERFILE = """\
 FROM python:3.11-slim
 {ca_layer}{binary_layer}\
-RUN pip install --no-cache-dir --disable-pip-version-check pytest pytest-json-report
+RUN pip install --no-cache-dir --disable-pip-version-check \
+    pytest pytest-json-report pytest-cov coverage ruff mypy
 COPY . /build
 RUN pip install --no-cache-dir --disable-pip-version-check /build
 ENV PYTHONPATH={pythonpath}
@@ -134,6 +139,7 @@ def lockfile_image_key(repo_path: Path) -> str:
     for name in _configured_system_binaries():
         digest.update(name.encode("utf-8"))
         digest.update(b"\0")
+    digest.update(str(_IMAGE_RECIPE_VERSION).encode("utf-8"))
     return digest.hexdigest()
 
 
