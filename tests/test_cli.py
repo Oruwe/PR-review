@@ -123,3 +123,103 @@ def test_the_three_commands_are_documented() -> None:
     assert _run("--help").returncode == 0
     for command in ("brain", "check", "norms"):
         assert command in _run("--help").stdout
+
+
+# --------------------------------------------------------------------------------------
+# In process, so the branches are actually exercised rather than only shelled out to
+# --------------------------------------------------------------------------------------
+
+
+def test_argument_parsing_rejects_a_missing_required_option() -> None:
+    from prflagger.cli import main
+
+    with pytest.raises(SystemExit) as exit_info:
+        main(["check", "--repo", "."])  # no --base/--head
+    assert exit_info.value.code == 2
+
+
+def test_an_unknown_command_is_rejected() -> None:
+    from prflagger.cli import main
+
+    with pytest.raises(SystemExit):
+        main(["not-a-command"])
+
+
+def test_check_in_process_writes_a_report(
+    seeds: dict[str, dict[str, str]], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from prflagger.cli import main
+
+    meta = seeds["seed/untested-api"]
+    out = tmp_path / "report.html"
+    code = main(
+        ["check", "--repo", _worktree(), "--base", meta["base"], "--head", meta["head"],
+         "--out", str(out)]
+    )
+
+    assert code == 0
+    assert out.is_file()
+    printed = capsys.readouterr().out
+    assert "observation(s)" in printed
+    assert "join_arg_string" in printed
+
+
+def test_brain_build_falls_back_to_a_declarative_profile(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With no gh on PATH the brain still builds, and says what it could not mine."""
+    from prflagger.brain import harvest as harvest_module
+    from prflagger.cli import main
+
+    monkeypatch.setenv("PRFLAGGER_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(harvest_module.shutil, "which", lambda _: None)
+
+    assert main(["brain", "build", "--repo", "pallets/click"]) == 0
+
+    captured = capsys.readouterr()
+    assert "harvest unavailable" in captured.err
+    assert "declarative-only" in captured.err
+    assert "norm(s)" in captured.out
+    assert (tmp_path / "brain" / "pallets__click" / "repo_profile.json").is_file()
+
+
+def test_norms_in_process_reports_when_there_is_nothing_yet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from prflagger.cli import main
+
+    monkeypatch.setenv("PRFLAGGER_CACHE_DIR", str(tmp_path))
+    monkeypatch.chdir(tmp_path)  # no config.toml, no target checkout
+
+    assert main(["norms", "--repo", "someone/else"]) == 0
+    assert "brain build" in capsys.readouterr().out
+
+
+def test_a_failing_probe_becomes_a_coverage_fact_not_a_crash(
+    seeds: dict[str, dict[str, str]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A probe that blows up must be named in the coverage statement, never swallowed."""
+    import prflagger.cli as cli_module
+
+    def explode(repo: Path, base: str, head: str) -> list[object]:
+        raise RuntimeError("probe exploded")
+
+    monkeypatch.setattr(cli_module, "api_diff", explode)
+
+    meta = seeds["seed/untested-api"]
+    out = tmp_path / "report.html"
+    assert cli_module.main(
+        ["check", "--repo", _worktree(), "--base", meta["base"], "--head", meta["head"],
+         "--out", str(out)]
+    ) == 0
+
+    html = out.read_text(encoding="utf-8")
+    assert "api surface" in html
+    assert "probe exploded" in html
+
+
+def test_reason_names_the_error_type() -> None:
+    from prflagger.cli import _reason
+
+    assert _reason(ValueError("boom")) == "ValueError: boom"
+    assert _reason(RuntimeError()) == "RuntimeError: RuntimeError"

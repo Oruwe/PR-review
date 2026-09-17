@@ -12,12 +12,14 @@ Idempotent: re-running resets each branch to the same content.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+SEED_DATE = "2026-01-01T00:00:00+00:00"
 TARGET_FILE = "src/click/shell_completion.py"
 SILENT_FILE = "src/click/formatting.py"
 ANCHOR = "def split_arg_string(string: str) -> list[str]:"
@@ -78,9 +80,14 @@ def _git_bare(bare: Path, *argv: str) -> str:
     return _run(["git", f"--git-dir={bare}", *argv], REPO_ROOT)
 
 
-def _run(argv: list[str], cwd: Path) -> str:
+def _run(argv: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
     completed = subprocess.run(
-        argv, cwd=cwd, capture_output=True, text=True, check=True
+        argv,
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=True,
+        env={**os.environ, **env} if env else None,
     )
     return completed.stdout.strip()
 
@@ -135,10 +142,13 @@ def main() -> int:
             _run(["git", "checkout", "--quiet", "--", "."], staging)
             _apply(staging, branch)
             _run(["git", "add", "-A"], staging)
+            # Fixed identity and timestamps, so re-seeding lands on the same commits.
+            # A demo that changes SHAs under you is not rehearsable.
             _run(
                 ["git", "-c", "user.email=seed@prflagger", "-c", "user.name=PR Flagger",
                  "commit", "--quiet", "-m", f"{meta['title']}\n\n{meta['body']}"],
                 staging,
+                env={"GIT_AUTHOR_DATE": SEED_DATE, "GIT_COMMITTER_DATE": SEED_DATE},
             )
             head = _run(["git", "rev-parse", "HEAD"], staging)
             _git_bare(bare, "branch", "--force", branch, head)
