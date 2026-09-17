@@ -714,6 +714,8 @@ pre.evidence.source::selection { color: var(--text); }
   overflow-y: auto;
 }
 
+.sym-list { mask-image: linear-gradient(180deg, #000 0, #000 88%, transparent 100%); }
+
 .sym-list li { color: var(--text-dim); overflow-wrap: anywhere; }
 
 .sym-list li b { color: var(--text); font-weight: 400; }
@@ -742,6 +744,16 @@ pre.evidence.source::selection { color: var(--text); }
 .blast-node { fill: var(--surface); stroke: var(--line); }
 .blast-node.is-changed { fill: #241C14; stroke: var(--orange); }
 .blast-label { font: 400 11px var(--mono); fill: var(--text-dim); }
+
+.blast-head {
+  font: 600 9.5px var(--mono);
+  letter-spacing: 0.1em;
+  fill: var(--text-dim);
+}
+
+.blast-note { font: 400 10.5px var(--mono); fill: var(--orange-mid); }
+
+.blast-arrow { fill: var(--orange); opacity: 0.6; }
 .blast-label.is-changed { fill: var(--text); }
 
 /* --------------------------------------------------------------- sandbox run */
@@ -987,9 +999,27 @@ table.plain td.v { color: var(--text-dim); }
 
 @media (max-width: 900px) {
   .two-col { grid-template-columns: 1fr; gap: 26px; }
+  /* The stat strip needs ~350px of its own; below this it takes its own row rather
+     than squeezing the masthead's first column down to one word per line. */
+  .masthead { grid-template-columns: minmax(0, 1fr); }
+  .topline { grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
 }
 
 @media (max-width: 620px) {
+  .topline { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 18px; }
+  .topline dt { max-width: none; }
+  /* A candidate's name is one long identifier; at this width it needs the whole row,
+     with its verdict underneath rather than fighting it for space. */
+  .cand { grid-template-columns: 18px minmax(0, 1fr); gap: 4px 10px; font-size: 12px; }
+  .cand .note { grid-column: 2; }
+  .cand .mark { grid-row: span 2; align-self: start; }
+  .loop { padding: 18px 14px 20px; }
+  .loop-tests { min-height: 0; }
+  .pr-row { grid-template-columns: 20px minmax(0, 1fr); gap: 6px 12px; padding: 14px 14px; }
+  .pr-row .num-cell { grid-column: 2; }
+  .pr-row .sev-dots { grid-column: 2; }
+  .pr-body { padding: 0 14px 18px; }
+  .container-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .shell { padding: 0 16px 64px; }
   .masthead { padding-top: 28px; }
   .brand h1 { font-size: 24px; }
@@ -1228,9 +1258,9 @@ const WIDE = {
 const NARROW = {
   width: 420,
   height: 1112,
-  box: {w: 286, h: 60},
+  box: {w: 286, h: 66},
   at: {
-    pr: [67, 8, 286, 60],
+    pr: [67, 6, 286, 66],
     c2: [67, 84],
     c3: [67, 160],
     c1base: [67, 236],
@@ -1366,8 +1396,10 @@ function renderMap() {
     const source = nodeById(edge.from);
     const target = nodeById(edge.to);
     const live = isLive(source) && isLive(target);
-    const dead = source && (source.status === "failed" || source.status === "idle");
-    const cls = live ? " is-live" : dead ? " is-dead" : "";
+    // Red is reserved for what actually broke. A component that simply did not run
+    // leaves its wiring dim, which is the idle treatment, not an error.
+    const broken = source && ["failed", "timeout", "oom"].includes(source.status);
+    const cls = live ? " is-live" : broken ? " is-dead" : "";
     wires.appendChild(
       svg("path", {class: "wire" + cls, d: path.d, "data-edge": edge.from + ">" + edge.to})
     );
@@ -1446,14 +1478,14 @@ function nodeGroup(node, box, plan) {
     ])
   );
   clipped.appendChild(
-    svg("text", {class: "comp", x: box.x + 14, y: box.y + 21, text: node.component.toUpperCase()})
+    svg("text", {class: "comp", x: box.x + 14, y: box.y + 19, text: node.component.toUpperCase()})
   );
-  clipped.appendChild(svg("text", {class: "lab", x: box.x + 14, y: box.y + 41, text: node.label}));
+  clipped.appendChild(svg("text", {class: "lab", x: box.x + 14, y: box.y + 39, text: node.label}));
 
   const detail = statusLine(node, box);
   if (detail) {
     clipped.appendChild(
-      svg("text", {class: "det", x: box.x + 14, y: box.y + box.h - 9, text: detail})
+      svg("text", {class: "det", x: box.x + 14, y: box.y + box.h - 10, text: detail})
     );
   }
   group.appendChild(clipped);
@@ -1832,7 +1864,11 @@ function whereLine(finding) {
     if (run) bits.push(el("span", {class: "pill " + run.outcome, text: "run " + run.outcome}));
   }
   bits.forEach((bit, index) => {
-    if (index) line.appendChild(el("span", {class: "sep", text: "/"}));
+    // The separator sits between text bits only: a pill that wraps onto its own line
+    // would otherwise leave a slash hanging at the end of the previous one.
+    if (index && !bit.classList.contains("pill")) {
+      line.appendChild(el("span", {class: "sep", text: "/"}));
+    }
     line.appendChild(bit);
   });
   return bits.length ? line : null;
@@ -2570,7 +2606,8 @@ function blastRadius(pr) {
   if (!pairs.length) return null;
 
   const rowH = 30;
-  const height = Math.max(shownChanged.length, shownCallers.length) * rowH + 30;
+  const top = 46;
+  const height = Math.max(shownChanged.length, shownCallers.length) * rowH + top + 8;
   const node = document.createElementNS(SVG_NS, "svg");
   node.setAttribute("viewBox", "0 0 640 " + height);
   node.setAttribute("id", "blast");
@@ -2580,14 +2617,36 @@ function blastRadius(pr) {
     pairs.length + " resolved call edges from " + shownCallers.length + " callers into " + shownChanged.length + " changed symbols"
   );
 
-  const yFor = (list, name) => 26 + list.indexOf(name) * rowH;
+  const yFor = (list, name) => top + list.indexOf(name) * rowH;
+  node.appendChild(svg("text", {class: "blast-head", x: 4, y: 22, text: "CHANGED BY THIS DIFF"}));
+  node.appendChild(
+    svg("text", {class: "blast-head", x: 376, y: 22, text: "CALLERS THE GRAPH REACHED"})
+  );
+  node.appendChild(
+    svg("text", {
+      class: "blast-note",
+      x: 310,
+      y: 22,
+      "text-anchor": "middle",
+      text: "◀ calls",
+    })
+  );
+
   pairs.forEach(([caller, callee], index) => {
     const y1 = yFor(shownCallers, caller) + 10;
     const y2 = yFor(shownChanged, callee) + 10;
     node.appendChild(
       svg("path", {
         class: "blast-edge is-traced",
-        d: `M 376 ${y1} C 320 ${y1}, 300 ${y2}, 244 ${y2}`,
+        d: `M 376 ${y1} C 320 ${y1}, 300 ${y2}, 248 ${y2}`,
+        style: "animation-delay:" + index * 45 + "ms",
+      })
+    );
+    node.appendChild(
+      svg("path", {
+        class: "blast-arrow is-traced",
+        d: "M 0 0 L 7 -3.6 L 7 3.6 Z",
+        transform: `translate(244 ${y2}) rotate(0)`,
         style: "animation-delay:" + index * 45 + "ms",
       })
     );

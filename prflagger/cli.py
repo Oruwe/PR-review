@@ -60,18 +60,21 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("--base", required=True)
     check.add_argument("--head", required=True)
     check.add_argument("--out", type=Path, default=Path("report.html"))
+    # Both default to siblings of --out. A command's outputs belong where it was told
+    # to write, not in the working directory: anything else makes a check run somewhere
+    # else overwrite them.
     check.add_argument(
         "--json",
         dest="json_out",
         type=Path,
-        default=Path(".cache/ui/findings.json"),
-        help="findings document the interface renders from",
+        default=None,
+        help="findings document the interface renders from (default: <out>.findings.json)",
     )
     check.add_argument(
         "--ui",
         type=Path,
-        default=Path("index.html"),
-        help="the interface: one self-contained HTML file",
+        default=None,
+        help="the interface, one self-contained HTML file (default: <out dir>/index.html)",
     )
 
     norms = sub.add_parser("norms", help="print learned norms with evidence")
@@ -97,8 +100,10 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _check(
-    repo: Path, base: str, head: str, out: Path, json_out: Path, ui_out: Path
+    repo: Path, base: str, head: str, out: Path, json_out: Path | None, ui_out: Path | None
 ) -> int:
+    json_out = json_out or out.with_suffix(".findings.json")
+    ui_out = ui_out or out.with_name("index.html")
     repo = repo.resolve()
     slug = _configured_slug()
     verified: list[dict[str, str]] = []

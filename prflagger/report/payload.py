@@ -188,7 +188,9 @@ class SandboxRun:
                 1 for v in per_test.values() if v in {"skipped", "xfailed", "xpassed"}
             ),
             "failed_nodeids": failed,
-            "per_test": per_test,
+            # The per-test map is not carried: 2,000 nodeids weigh more than the whole
+            # log and the page renders the counts and the failures, which are above.
+            # `.cache/jobs/<key>.json` keeps the full map for anyone who wants it.
             "lines": _replayable(self.lines),
         }
 
@@ -433,17 +435,19 @@ def _replayable(lines: tuple[tuple[float, str], ...]) -> list[dict[str, Any]]:
     """
     projected: list[dict[str, Any]] = []
     for offset, text in lines:
-        if text.startswith('{"created"') or text.startswith('{"meta"'):
-            projected.append(
-                {
-                    "t": round(offset, 4),
-                    "text": (
-                        f"[pytest json report, {len(text)} bytes"
-                        " \u2014 projected into per-test outcomes]"
-                    ),
-                    "omitted": True,
-                }
+        # The report is written without a leading newline, so it usually arrives welded
+        # to the end of the last test's line rather than on one of its own.
+        found = [text.find(marker) for marker in ('{"created"', '{"meta"')]
+        start = min((position for position in found if position != -1), default=-1)
+        if start != -1 and len(text) - start > 400:
+            prefix = text[:start].rstrip()
+            note = (
+                f"[pytest json report, {len(text) - start} bytes"
+                " \u2014 projected into per-test outcomes]"
             )
+            if prefix:
+                projected.append({"t": round(offset, 4), "text": prefix})
+            projected.append({"t": round(offset, 4), "text": note, "omitted": True})
             continue
         projected.append({"t": round(offset, 4), "text": text})
     return projected
