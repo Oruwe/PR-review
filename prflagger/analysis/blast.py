@@ -7,6 +7,8 @@ something that calls it.
 
 from __future__ import annotations
 
+import subprocess
+import tempfile
 import tomllib
 from collections import defaultdict
 from dataclasses import replace
@@ -57,12 +59,31 @@ def changed_symbols(
         if not relative.endswith(".py"):
             continue
         path = repo / relative
-        if not path.is_file() or not _within(path, root):
+        if not _within(path, root):
             continue
-        for symbol in symbols_in_file(path, module_fqn_for(path, root)):
+        # Parse the file as it exists at `head`, not as the working tree happens to be
+        # checked out: the ranges are head-side line numbers.
+        for symbol in _symbols_at(repo, relative, head, root):
             if _overlaps(symbol, spans):
                 touched.append(replace(symbol, file=relative))
     return touched
+
+
+def _symbols_at(repo: Path, relative: str, revision: str, root: Path) -> list[Symbol]:
+    """Symbols in `relative` as of `revision`, read from git rather than the worktree."""
+    blob = subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo), "show", f"{revision}:{relative}"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if blob.returncode != 0:
+        return []  # added then removed, or not present at that revision
+    module = module_fqn_for(repo / relative, root)
+    with tempfile.TemporaryDirectory() as directory:
+        staged = Path(directory) / Path(relative).name
+        staged.write_text(blob.stdout, encoding="utf-8")
+        return symbols_in_file(staged, module)
 
 
 def _overlaps(symbol: Symbol, spans: list[tuple[int, int]]) -> bool:

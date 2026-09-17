@@ -13,12 +13,8 @@ from typing import Any
 
 import structlog
 
-from prflagger.sandbox.runner import (
-    _docker,
-    build_image,
-    cache_root,
-    lockfile_image_key,
-)
+from prflagger.sandbox import runner
+from prflagger.sandbox.runner import build_image, cache_root, lockfile_image_key
 
 __all__ = ["calibrate", "calibration_path"]
 
@@ -50,7 +46,7 @@ def calibrate(repo_path: Path, commit: str) -> tuple[int, int]:
         return int(stored["memory_mb"]), int(stored["timeout_s"])
 
     image = build_image(repo_path, lockfile_image_key(repo_path))
-    completed = _docker(
+    completed = runner._docker(
         [
             "run",
             "--rm",

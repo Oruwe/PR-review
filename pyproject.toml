@@ -29,6 +29,7 @@ select = ["E", "F", "I", "UP", "B", "SIM", "T20"]
 [tool.ruff.lint.per-file-ignores]
 "prflagger/cli.py" = ["T20"]
 "tests/*" = ["T20"]
+"scripts/*" = ["T20", "S101"]
 
 [tool.mypy]
 python_version = "3.11"

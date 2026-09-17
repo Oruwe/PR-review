@@ -107,8 +107,13 @@ class ImageBuildError(RuntimeError):
 
 
 def cache_root() -> Path:
-    """`.cache`, or `PRFLAGGER_CACHE_DIR` when that is set."""
-    return Path(os.environ.get("PRFLAGGER_CACHE_DIR", ".cache"))
+    """`.cache`, or `PRFLAGGER_CACHE_DIR` when that is set.
+
+    Always absolute. A relative cache path handed to `git -C <repo>` or `docker -v`
+    resolves against *that* directory, which silently plants worktrees inside the repo
+    under analysis.
+    """
+    return Path(os.environ.get("PRFLAGGER_CACHE_DIR", ".cache")).resolve()
 
 
 # ----------------------------------------------------------------------------------

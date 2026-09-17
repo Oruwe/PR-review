@@ -25,8 +25,8 @@ _CACHE_ROOT_ENV = "PRFLAGGER_CACHE_DIR"
 
 
 def cache_dir() -> Path:
-    """`.cache/llm`, or `<PRFLAGGER_CACHE_DIR>/llm` when that is set."""
-    root = Path(os.environ.get(_CACHE_ROOT_ENV, ".cache"))
+    """`.cache/llm`, or `<PRFLAGGER_CACHE_DIR>/llm` when that is set. Always absolute."""
+    root = Path(os.environ.get(_CACHE_ROOT_ENV, ".cache")).resolve()
     return root / "llm"
 
 
