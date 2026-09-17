@@ -26,6 +26,7 @@ from prflagger.characterize.validate import (
     run_tests_on,
     validate_on_base,
 )
+from prflagger.gitsafety import assert_safe_revision
 from prflagger.llm import complete
 from prflagger.models import Finding, Symbol
 from prflagger.providers import DEFAULT_MODEL
@@ -174,6 +175,7 @@ def _pr_text(repo: Path, head: str) -> tuple[str, str]:
     For a single-commit branch this is what the PR description says — the claim the
     system measures the diff against.
     """
+    assert_safe_revision(head)
     completed = subprocess.run(  # noqa: S603
         ["git", "-C", str(repo), "log", "-1", "--format=%s%n%x00%n%b", head],
         capture_output=True,

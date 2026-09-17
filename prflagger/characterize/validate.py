@@ -23,6 +23,7 @@ from typing import Any
 import structlog
 
 from prflagger.characterize.generate import RETRY_SUFFIX, split_test_functions
+from prflagger.gitsafety import assert_safe_revision
 from prflagger.llm import complete
 from prflagger.models import Job, Outcome, TestResult
 from prflagger.providers import DEFAULT_MODEL
@@ -215,6 +216,7 @@ def _failure_output(result: TestResult) -> str:
 
 def base_checkout(repo: Path, base_sha: str) -> Path:
     """A checkout of `base_sha`. Reuses `repo` when it is already there."""
+    assert_safe_revision(base_sha, what="base_sha")
     head = subprocess.run(  # noqa: S603
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         capture_output=True,

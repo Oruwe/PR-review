@@ -15,6 +15,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from prflagger.privacy import redact
+
 __all__ = [
     "EMBED_MODEL",
     "EmbeddingUnavailable",
@@ -65,7 +67,13 @@ def complete(
     On a cache hit the provider is never called. Records token counts to
     .cache/llm/usage.jsonl. `provider` defaults to `providers.bedrock_provider()`,
     bound to `model`.
+
+    The prompt is redacted for PII (emails, secret-shaped tokens) before it is
+    hashed, cached, or sent anywhere — see `privacy.redact`. The cache key and
+    the on-disk record are both over the redacted text, so nothing PII-bearing
+    is ever written to disk or crosses the network.
     """
+    prompt = redact(prompt)
     key = _key(
         {
             "op": "complete",
@@ -114,7 +122,12 @@ def complete(
 
 
 def embed(texts: list[str]) -> list[list[float]]:
-    """sentence-transformers all-MiniLM-L6-v2, local. Cached the same way."""
+    """sentence-transformers all-MiniLM-L6-v2, local. Cached the same way.
+
+    Each input is redacted for PII before it is hashed or cached — see
+    `privacy.redact`.
+    """
+    texts = [redact(text) for text in texts]
     vectors: list[list[float]] = [[] for _ in texts]
     pending: list[tuple[int, str, str]] = []  # index, text, cache key
 

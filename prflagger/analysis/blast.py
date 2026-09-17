@@ -17,6 +17,7 @@ from pathlib import Path
 from prflagger.analysis.callgraph import build_call_graph, index_symbols
 from prflagger.analysis.diff import changed_ranges
 from prflagger.analysis.symbols import module_fqn_for, symbols_in_file
+from prflagger.gitsafety import assert_safe_revision
 from prflagger.models import Symbol
 
 __all__ = ["blast_radius", "changed_symbols", "package_root_for"]
@@ -71,6 +72,7 @@ def changed_symbols(
 
 def _symbols_at(repo: Path, relative: str, revision: str, root: Path) -> list[Symbol]:
     """Symbols in `relative` as of `revision`, read from git rather than the worktree."""
+    assert_safe_revision(revision)
     blob = subprocess.run(  # noqa: S603
         ["git", "-C", str(repo), "show", f"{revision}:{relative}"],
         capture_output=True,
