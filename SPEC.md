@@ -178,10 +178,12 @@ def calibrate(repo_path: Path, commit: str) -> tuple[int, int]:
 
 ```
 docker run --rm --network=none --memory={mb}m --memory-swap={mb}m
-  --pids-limit=256 --cpus=1 --read-only --tmpfs /tmp:rw,size=256m
+  --pids-limit=256 --cpus=1 --read-only --tmpfs /tmp:rw,exec,size=256m
   --user 1000:1000 --security-opt no-new-privileges --cap-drop=ALL
   -v {worktree}:/src:ro {image} timeout {t} pytest --json-report ...
 ```
+
+`exec` on the tmpfs is required: Docker mounts a tmpfs `noexec` by default, and a suite whose tests write an executable file under `tmp_path` and run it fails for that reason alone. Isolation is unchanged otherwise — no network, no capabilities, non-root, read-only root, capped memory and pids.
 
 Outcome mapping: exit 0 → `PASSED`; exit 1 with a parseable report → `FAILED`; exit 124 →
 `TIMEOUT`; exit 137 → `OOM`; pytest exit 2 → `COLLECTION_ERROR`; image build failure →

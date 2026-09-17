@@ -34,6 +34,8 @@ select = ["E", "F", "I", "UP", "B", "SIM", "T20"]
 python_version = "3.11"
 strict = true
 files = ["prflagger"]
+# mypy runs from its own tool env; point it at the interpreter that has the deps.
+python_executable = "/usr/local/bin/python3"
 
 [[tool.mypy.overrides]]
 module = ["boto3.*", "botocore.*", "sentence_transformers.*"]

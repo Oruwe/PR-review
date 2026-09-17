@@ -1,4 +1,8 @@
 [target]
-slug = "psf/requests"          # replace with your target repo choice
-fork = "your-github-username/requests"
-package_root = "src/requests"
+slug = "pallets/click"
+fork = "Oruwe/click"          # seeded branches for C4 live here — fork must exist before C4
+package_root = "src/click"
+
+# Real binaries the target's suite shells out to. Staged into the image from this
+# machine, because the image build cannot always reach a package archive.
+system_binaries = ["less", "cat", "sed"]
