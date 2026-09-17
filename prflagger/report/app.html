@@ -16,6 +16,9 @@
   --orange-dim: #6B4028;
   --red: #FF6B5C;
   --green: #5CD6A0;
+  /* Derived from the two orange tokens for the severity ramp: 1.0 red, 0.8 orange,
+     0.5 this, 0.3 text-dim. Verified against --surface at 5.8:1. */
+  --orange-mid: #C97F45;
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -155,6 +158,160 @@ code, pre, .mono { font-family: var(--mono); font-variant-ligatures: none; }
 
 .zone-note { color: var(--text-dim); font-size: 14px; max-width: 58ch; margin: 0; }
 
+/* ---------------------------------------------------------------------- map */
+
+.map-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.map-wrap {
+  background: linear-gradient(180deg, #100D0A 0%, var(--bg) 100%);
+  border-radius: 14px;
+  padding: 10px 6px 4px;
+}
+
+#map { width: 100%; height: auto; display: block; }
+
+/* Wiring. Idle wiring is --orange-dim so it recedes; live wiring is --orange, and the
+   gap between the two is the whole effect. Neither carries text. */
+.wire { fill: none; stroke: var(--orange-dim); stroke-width: 1.6; }
+
+.wire.is-live { stroke: var(--orange); stroke-width: 2; opacity: 0.55; }
+
+.wire.is-dead { stroke: var(--red); opacity: 0.4; stroke-dasharray: 5 5; }
+
+.wire-flow {
+  fill: none;
+  stroke: var(--orange);
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 16 420;
+  stroke-dashoffset: 436;
+  opacity: 0;
+}
+
+.wire-flow.is-flowing { opacity: 1; animation: flow 900ms linear infinite; }
+
+@keyframes flow { to { stroke-dashoffset: 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .wire-flow.is-flowing { animation: none; stroke-dasharray: none; opacity: 0.8; }
+}
+
+.arrow { fill: var(--orange-dim); }
+.arrow.is-live { fill: var(--orange); opacity: 0.7; }
+.arrow.is-dead { fill: var(--red); opacity: 0.5; }
+
+/* Nodes */
+
+.node { cursor: pointer; }
+
+.node .box {
+  fill: var(--surface);
+  stroke: var(--line);
+  stroke-width: 1;
+  transition: fill 200ms ease-out, stroke 200ms ease-out;
+}
+
+.node .rail { fill: var(--orange-dim); transition: fill 200ms ease-out; }
+
+.node .comp {
+  font: 600 11px var(--mono);
+  letter-spacing: 0.08em;
+  fill: var(--text-dim);
+  transition: fill 200ms ease-out;
+}
+
+.node .lab { font: 600 15px var(--sans); fill: var(--text-dim); transition: fill 200ms ease-out; }
+
+.node .det { font: 400 11.5px var(--sans); fill: var(--text-dim); opacity: 0.85; }
+
+.node .count-badge { font: 600 12px var(--mono); fill: var(--bg); }
+
+.node.is-complete .box { fill: var(--surface-2); stroke: #3A2E22; }
+.node.is-complete .rail { fill: var(--orange); }
+.node.is-complete .lab { fill: var(--text); }
+.node.is-complete .comp { fill: var(--orange); }
+
+.node.is-active .box { fill: #241C14; stroke: var(--orange); stroke-width: 1.6; }
+.node.is-active .rail { fill: var(--orange); }
+.node.is-active .lab, .node.is-active .comp { fill: var(--orange); }
+
+.node.is-failed .box, .node.is-timeout .box, .node.is-oom .box {
+  fill: #221310;
+  stroke: var(--red);
+}
+
+.node.is-failed .rail, .node.is-timeout .rail, .node.is-oom .rail { fill: var(--red); }
+.node.is-failed .comp, .node.is-timeout .comp, .node.is-oom .comp { fill: var(--red); }
+.node.is-failed .lab, .node.is-timeout .lab, .node.is-oom .lab { fill: var(--text); }
+
+.node.is-selected .box { stroke: var(--orange); stroke-width: 2; }
+
+.node .halo { fill: none; stroke: var(--orange); stroke-width: 1; opacity: 0; }
+
+.node.is-active .halo { opacity: 0.5; }
+
+@media (prefers-reduced-motion: no-preference) {
+  .node.is-active .halo { animation: throb 1400ms ease-out infinite; }
+}
+
+@keyframes throb {
+  0% { opacity: 0.55; transform: scale(1); }
+  70% { opacity: 0; transform: scale(1.035); }
+  100% { opacity: 0; transform: scale(1.035); }
+}
+
+#map.has-selection .node { opacity: 0.4; transition: opacity 200ms ease-out; }
+
+#map.has-selection .node.is-selected { opacity: 1; }
+
+.node:hover .box { stroke: var(--orange); }
+
+.node:focus-visible .box { stroke: var(--orange); stroke-width: 2; }
+
+.node .marker { stroke: var(--bg); stroke-width: 1; }
+
+.marker.sev-1 { fill: var(--red); }
+.marker.sev-08 { fill: var(--orange); }
+.marker.sev-05 { fill: var(--orange-mid); }
+.marker.sev-03 { fill: var(--text-dim); }
+
+.node .marker-more { font: 600 10.5px var(--mono); fill: var(--text-dim); }
+
+.vitals-head {
+  font: 600 10.5px var(--mono);
+  letter-spacing: 0.1em;
+  fill: var(--orange);
+}
+
+.vitals-row { font: 400 12.5px var(--mono); fill: var(--text-dim); }
+
+.vitals-note { font: 400 12.5px var(--sans); fill: var(--text-dim); }
+
+.chip[hidden] { display: none; }
+
+.map-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+  padding: 12px 4px 0;
+}
+
+.legend { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: var(--text-dim); }
+
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+
+.legend i {
+  width: 11px; height: 11px; border-radius: 3px;
+  background: var(--surface); border: 1px solid var(--line);
+  display: inline-block;
+}
+
+.legend i.complete { background: var(--surface-2); border-color: var(--orange); }
+.legend i.active { background: #241C14; border-color: var(--orange); }
+.legend i.failed { background: #221310; border-color: var(--red); }
+.legend i.marker { border-radius: 50%; background: var(--red); border: 0; width: 9px; height: 9px; }
+
 /* ------------------------------------------------------------------ filters */
 
 .filters {
@@ -192,9 +349,12 @@ code, pre, .mono { font-family: var(--mono); font-variant-ligatures: none; }
 
 .chip[aria-pressed="true"] .count { color: var(--text); }
 
+/* Colour encodes severity, not category: the ramp is the probe severities from the
+   spec — behaviour 1.0, api 0.8, coverage 0.5, lint 0.3 — so a glance at the rail
+   ranks the card. The kind is spelled out in words next to it. */
 .k-behavior_change { color: var(--red); }
 .k-api_change { color: var(--orange); }
-.k-coverage_gap { color: #8FB8FF; }
+.k-coverage_gap { color: var(--orange-mid); }
 .k-lint_regression { color: var(--text-dim); }
 .k-timeout, .k-oom { color: var(--red); }
 
@@ -510,6 +670,31 @@ table.plain td.v { color: var(--text-dim); }
     <dl class="topline" id="topline"></dl>
   </header>
 
+  <section class="zone" id="zone-map">
+    <div class="zone-head">
+      <div>
+        <span class="kicker">Zone 1 · The pipeline, as it ran</span>
+        <h2 id="map-title">Where every flag came from</h2>
+      </div>
+      <div class="map-controls">
+        <button class="chip" id="replay-run" aria-pressed="false">
+          <span class="dot"></span><span id="replay-label">Replay this run</span>
+        </button>
+        <button class="chip" id="clear-node" hidden>Clear node filter</button>
+      </div>
+    </div>
+    <div class="map-wrap">
+      <svg id="map" role="img" aria-labelledby="map-title" preserveAspectRatio="xMidYMid meet">
+        <g id="wires"></g>
+        <g id="nodes"></g>
+      </svg>
+    </div>
+    <div class="map-foot">
+      <div class="legend" id="legend"></div>
+      <p class="zone-note" id="map-note"></p>
+    </div>
+  </section>
+
   <section class="zone" id="zone-flags">
     <div class="zone-head">
       <div>
@@ -641,21 +826,516 @@ function renderMasthead() {
   });
 }
 
+/* ---------------------------------------------------------------------- map */
+
+/* Two hand-laid layouts rather than a force simulation: the pipeline has one correct
+   reading order and a solver would keep re-deciding it. Wide is the data flow as the
+   spec draws it; narrow is the same graph as a single column. */
+const WIDE = {
+  width: 1320,
+  height: 486,
+  box: {w: 172, h: 64},
+  at: {
+    pr: [40, 32, 132, 64],
+    c2: [228, 32],
+    c3: [424, 32],
+    c1base: [620, 32],
+    filter: [620, 124],
+    c1head: [620, 216],
+    c4: [856, 216],
+    c10: [1112, 272, 176, 98],
+    c5: [40, 306],
+    c6: [236, 306],
+    c7: [432, 306],
+    c8: [628, 306],
+    c9: [40, 400, 176, 64],
+  },
+  // The terminus takes three inputs at three heights, so nothing crosses.
+  merge: {c4: [1066, 296], c8: [1046, 320], c9: [1026, 344]},
+};
+
+const NARROW = {
+  width: 420,
+  height: 1112,
+  box: {w: 286, h: 60},
+  at: {
+    pr: [67, 8, 286, 52],
+    c2: [67, 84],
+    c3: [67, 160],
+    c1base: [67, 236],
+    filter: [67, 312],
+    c1head: [67, 388],
+    c4: [67, 464],
+    c5: [67, 564],
+    c6: [67, 640],
+    c7: [67, 716],
+    c8: [67, 792],
+    c9: [67, 892],
+    c10: [67, 1016, 286, 66],
+  },
+};
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+const state = {
+  kinds: new Set(),
+  node: null,
+  openFlags: new Set(),
+  highlight: null,
+  replaying: false,
+};
+
+function svg(tag, attrs, children) {
+  const node = document.createElementNS(SVG_NS, tag);
+  for (const key in attrs || {}) {
+    const value = attrs[key];
+    if (value === null || value === undefined || value === false) continue;
+    if (key === "text") node.textContent = String(value);
+    else node.setAttribute(key, String(value));
+  }
+  (children || []).forEach((child) => child && node.appendChild(child));
+  return node;
+}
+
+function layout() {
+  return window.innerWidth < 760 ? NARROW : WIDE;
+}
+
+function geometry(nodeId, plan) {
+  const at = plan.at[nodeId];
+  if (!at) return null;
+  return {x: at[0], y: at[1], w: at[2] || plan.box.w, h: at[3] || plan.box.h};
+}
+
+function nodeById(id) {
+  return (DATA.pipeline ? DATA.pipeline.nodes : []).find((node) => node.id === id) || null;
+}
+
+function findingsForNode(id) {
+  return (DATA.findings || []).filter((finding) => finding.node === id);
+}
+
+function severityClass(severity) {
+  if (severity >= 0.95) return "sev-1";
+  if (severity >= 0.7) return "sev-08";
+  if (severity >= 0.45) return "sev-05";
+  return "sev-03";
+}
+
+/* A node counts as live when this run actually put data through it. Idle and failed
+   nodes stay on the map: a component that could not run is a fact about the run. */
+function isLive(node) {
+  return node && (node.status === "complete" || node.status === "active");
+}
+
+function wirePath(edge, plan) {
+  const from = geometry(edge.from, plan);
+  const to = geometry(edge.to, plan);
+  if (!from || !to) return null;
+  const narrow = plan === NARROW;
+  const fromRight = [from.x + from.w, from.y + from.h / 2];
+  const fromBottom = [from.x + from.w / 2, from.y + from.h];
+  const toLeft = [to.x, to.y + to.h / 2];
+  const toTop = [to.x + to.w / 2, to.y];
+
+  if (narrow) {
+    // Straight down the column, except the three that jump to the terminus.
+    if (edge.to === "c10" && edge.from !== "c9") {
+      const side = edge.from === "c4" ? to.x + to.w + 22 : to.x - 22;
+      const mid = fromRight[1];
+      const anchorX = edge.from === "c4" ? fromRight[0] : from.x;
+      const entry = edge.from === "c4" ? to.x + to.w : to.x;
+      return {
+        d: `M ${anchorX} ${mid} H ${side} V ${to.y + to.h / 2} H ${entry}`,
+        head: [entry, to.y + to.h / 2, edge.from === "c4" ? 180 : 0],
+      };
+    }
+    return {
+      d: `M ${fromBottom[0]} ${fromBottom[1]} V ${toTop[1]}`,
+      head: [toTop[0], toTop[1], 90],
+    };
+  }
+
+  // The brain chain and the probes merge into the report from the left, at their own
+  // heights, so three arrows arrive without ever crossing.
+  if (edge.to === "c10") {
+    const merge = (plan.merge || {})[edge.from];
+    if (!merge) return null;
+    const [turnX, entryY] = merge;
+    return {
+      d: `M ${fromRight[0]} ${fromRight[1]} H ${turnX} V ${entryY} H ${to.x}`,
+      head: [to.x, entryY, 0],
+    };
+  }
+  if (from.x === to.x) {
+    return {
+      d: `M ${fromBottom[0]} ${fromBottom[1]} V ${toTop[1]}`,
+      head: [toTop[0], toTop[1], 90],
+    };
+  }
+  return {
+    d: `M ${fromRight[0]} ${fromRight[1]} H ${toLeft[0]}`,
+    head: [toLeft[0], toLeft[1], 0],
+  };
+}
+
+function renderMap() {
+  const plan = layout();
+  const map = $("#map");
+  map.setAttribute("viewBox", `0 0 ${plan.width} ${plan.height}`);
+  map.classList.toggle("has-selection", Boolean(state.node || state.highlight));
+  const wires = $("#wires");
+  const nodes = $("#nodes");
+  wires.innerHTML = "";
+  nodes.innerHTML = "";
+
+  (DATA.pipeline ? DATA.pipeline.edges : []).forEach((edge) => {
+    const path = wirePath(edge, plan);
+    if (!path) return;
+    const source = nodeById(edge.from);
+    const target = nodeById(edge.to);
+    const live = isLive(source) && isLive(target);
+    const dead = source && (source.status === "failed" || source.status === "idle");
+    const cls = live ? " is-live" : dead ? " is-dead" : "";
+    wires.appendChild(
+      svg("path", {class: "wire" + cls, d: path.d, "data-edge": edge.from + ">" + edge.to})
+    );
+    wires.appendChild(
+      svg("path", {
+        class: "wire-flow",
+        d: path.d,
+        "data-flow": edge.from + ">" + edge.to,
+      })
+    );
+    const [hx, hy, rotation] = path.head;
+    wires.appendChild(
+      svg("path", {
+        class: "arrow" + cls,
+        d: "M 0 0 L -9 -4.6 L -9 4.6 Z",
+        transform: `translate(${hx} ${hy}) rotate(${rotation})`,
+      })
+    );
+  });
+
+  const facts = vitals(plan);
+  if (facts) wires.appendChild(facts);
+
+  (DATA.pipeline ? DATA.pipeline.nodes : []).forEach((node) => {
+    const box = geometry(node.id, plan);
+    if (!box) return;
+    nodes.appendChild(nodeGroup(node, box, plan));
+  });
+}
+
+function nodeGroup(node, box, plan) {
+  const produced = findingsForNode(node.id);
+  const group = svg("g", {
+    class:
+      "node is-" +
+      node.status +
+      (state.node === node.id ? " is-selected" : "") +
+      (state.highlight === node.id ? " is-selected" : ""),
+    "data-node": node.id,
+    tabindex: "0",
+    role: "button",
+    "aria-label":
+      node.component +
+      " " +
+      node.label +
+      ": " +
+      node.status +
+      (node.detail ? ", " + node.detail : "") +
+      (produced.length ? ", " + produced.length + " flags" : ""),
+  });
+
+  group.appendChild(
+    svg("rect", {
+      class: "halo",
+      x: box.x - 4,
+      y: box.y - 4,
+      width: box.w + 8,
+      height: box.h + 8,
+      rx: 12,
+      style: "transform-origin: " + (box.x + box.w / 2) + "px " + (box.y + box.h / 2) + "px",
+    })
+  );
+  group.appendChild(
+    svg("rect", {class: "box", x: box.x, y: box.y, width: box.w, height: box.h, rx: 10})
+  );
+  group.appendChild(
+    svg("rect", {class: "rail", x: box.x, y: box.y + 10, width: 3, height: box.h - 20, rx: 1.5})
+  );
+  // Every label is clipped to its own box: a detail line that escapes its node reads as
+  // a connection to the node beside it.
+  const clipId = "clip-" + node.id;
+  const clipped = svg("g", {"clip-path": "url(#" + clipId + ")"});
+  clipped.appendChild(
+    svg("clipPath", {id: clipId}, [
+      svg("rect", {x: box.x, y: box.y, width: box.w - 8, height: box.h, rx: 10}),
+    ])
+  );
+  clipped.appendChild(
+    svg("text", {class: "comp", x: box.x + 14, y: box.y + 21, text: node.component.toUpperCase()})
+  );
+  clipped.appendChild(svg("text", {class: "lab", x: box.x + 14, y: box.y + 41, text: node.label}));
+
+  const detail = statusLine(node, box);
+  if (detail) {
+    clipped.appendChild(
+      svg("text", {class: "det", x: box.x + 14, y: box.y + box.h - 9, text: detail})
+    );
+  }
+  group.appendChild(clipped);
+
+  if (produced.length) {
+    const markers = svg("g", {class: "markers"});
+    const shown = produced.slice(0, plan === NARROW ? 10 : 7);
+    shown.forEach((finding, index) => {
+      markers.appendChild(
+        svg("circle", {
+          class: "marker " + severityClass(finding.severity),
+          cx: box.x + box.w - 16 - index * 13,
+          cy: box.y + 14,
+          r: 4.6,
+          "data-finding": finding.id,
+        })
+      );
+    });
+    if (produced.length > shown.length) {
+      markers.appendChild(
+        svg("text", {
+          class: "marker-more",
+          x: box.x + box.w - 20 - shown.length * 13,
+          y: box.y + 18,
+          "text-anchor": "end",
+          text: "+" + (produced.length - shown.length),
+        })
+      );
+    }
+    group.appendChild(markers);
+  }
+
+  const activate = () => selectNode(node.id === state.node ? null : node.id);
+  group.addEventListener("click", activate);
+  group.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      activate();
+    }
+  });
+  return group;
+}
+
+/* The measured numbers come first and the prose second, because the numbers are what a
+   node's line is for. Anything past the box is clipped, so the budget is generous. */
+function statusLine(node, box) {
+  const bits = [];
+  if (node.count !== null && node.count !== undefined) bits.push(node.count + " out");
+  if (node.duration_s) bits.push(node.duration_s + "s");
+  const measured = bits.join(" · ");
+  const text = node.detail ? (measured ? measured + " · " + node.detail : node.detail) : measured;
+  const room = Math.floor((box.w - 30) / 6.05);
+  return text.length > room ? text.slice(0, room - 1).trimEnd() + "…" : text;
+}
+
+/* The isolation facts, in the map's empty quarter. They are the same caps every run in
+   this pass carried, read off the runs themselves rather than off the spec. */
+function vitals(plan) {
+  const runs = DATA.runs || [];
+  if (!runs.length || plan === NARROW) return null;
+  const caps = runs.map((run) => run.memory_mb);
+  const tests = runs.reduce((total, run) => total + run.tests_total, 0);
+  const wall = runs.reduce((total, run) => total + run.wall_s, 0);
+  const odd = runs.filter((run) => ["timeout", "oom"].includes(run.outcome));
+  const lines = [
+    "EVERY EXECUTION IN THIS PASS",
+    "network  disabled (--network=none)",
+    "root fs  read-only, tmpfs for /tmp",
+    "user     1000:1000, all caps dropped",
+    "memory   " + Math.min.apply(null, caps) + "–" + Math.max.apply(null, caps) + " MB, swap capped to match",
+    "",
+    tests.toLocaleString() + " tests executed across " + runs.length + " recorded runs, " + wall.toFixed(1) + "s of wall time",
+    odd.length
+      ? odd.map((run) => run.outcome + " (exit " + run.exit_code + ")").join(", ") + " — returned as outcomes, not raised"
+      : "no timeouts or OOMs in this pass",
+  ];
+  const group = svg("g", {class: "vitals"});
+  lines.forEach((text, index) => {
+    if (!text) return;
+    group.appendChild(
+      svg("text", {
+        class: index === 0 ? "vitals-head" : index >= 6 ? "vitals-note" : "vitals-row",
+        x: 44,
+        y: 138 + index * 19 + (index >= 6 ? 6 : 0),
+        text: text,
+      })
+    );
+  });
+  return group;
+}
+
+function selectNode(id) {
+  state.node = id;
+  state.highlight = null;
+  $("#clear-node").hidden = !id;
+  renderMap();
+  renderFlags();
+  renderFilters();
+}
+
+/* Clicking a flag lights its origin node: the two zones are one instrument, so the
+   link has to be visible in both directions. */
+function highlightNode(id) {
+  state.highlight = id;
+  renderMap();
+  const target = $('#nodes [data-node="' + id + '"]');
+  if (target && target.scrollIntoView) target.scrollIntoView({block: "nearest"});
+}
+
+function renderLegend() {
+  const legend = $("#legend");
+  legend.innerHTML = "";
+  [
+    ["", "idle — did not run"],
+    ["complete", "complete"],
+    ["active", "active"],
+    ["failed", "failed, timed out or OOM"],
+    ["marker", "each dot is a flag produced here"],
+  ].forEach(([cls, label]) => {
+    legend.appendChild(el("span", {}, [el("i", {class: cls || null}), label]));
+  });
+
+  const nodes = (DATA.pipeline ? DATA.pipeline.nodes : []);
+  const ran = nodes.filter(isLive).length;
+  const broken = nodes.filter((node) => ["failed", "timeout", "oom"].includes(node.status));
+  $("#map-note").textContent =
+    ran +
+    " of " +
+    nodes.length +
+    " components ran in this pass. " +
+    (broken.length
+      ? broken.map((node) => node.component + " " + node.label.toLowerCase() + ": " + node.detail).join("; ")
+      : "Click a node to filter the flags below; click a flag to light the node that produced it.");
+}
+
+/* The replay is the recorded order and the recorded durations, compressed to a fixed
+   wall clock so the whole pass is watchable. Nothing here is invented: a node with no
+   measured duration is held for the same short beat as its neighbours. */
+const REPLAY_ORDER = [
+  ["pr", "c2"],
+  ["c2", "c3"],
+  ["c3", "c1base"],
+  ["c1base", "filter"],
+  ["filter", "c1head"],
+  ["c1head", "c4"],
+  ["c5", "c6"],
+  ["c6", "c7"],
+  ["c7", "c8"],
+  ["c9", "c10"],
+  ["c8", "c10"],
+  ["c4", "c10"],
+];
+
+let replayTimers = [];
+
+function stopReplay() {
+  replayTimers.forEach(clearTimeout);
+  replayTimers = [];
+  state.replaying = false;
+  $("#replay-run").setAttribute("aria-pressed", "false");
+  $("#replay-label").textContent = "Replay this run";
+  renderMap();
+}
+
+function replay() {
+  if (state.replaying) {
+    stopReplay();
+    return;
+  }
+  state.replaying = true;
+  $("#replay-run").setAttribute("aria-pressed", "true");
+  $("#replay-label").textContent = "Stop replay";
+
+  const original = {};
+  (DATA.pipeline.nodes || []).forEach((node) => {
+    original[node.id] = node.status;
+    if (isLive(node)) node.status = "idle";
+  });
+  renderMap();
+
+  const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const step = reduce ? 240 : 420;
+  let clock = 200;
+
+  REPLAY_ORDER.forEach(([from, to]) => {
+    const source = nodeById(from);
+    const target = nodeById(to);
+    if (!source || !target) return;
+    const live = original[from] === "complete" || original[from] === "active";
+    replayTimers.push(
+      setTimeout(() => {
+        source.status = live ? "active" : original[from];
+        renderMap();
+        if (live && !reduce) {
+          const flow = $('#wires [data-flow="' + from + ">" + to + '"]');
+          if (flow) flow.classList.add("is-flowing");
+        }
+      }, clock)
+    );
+    clock += step;
+    replayTimers.push(
+      setTimeout(() => {
+        source.status = original[from];
+        const flow = $('#wires [data-flow="' + from + ">" + to + '"]');
+        if (flow) flow.classList.remove("is-flowing");
+        target.status = original[to] === "idle" ? "idle" : original[to] === "complete" ? "active" : original[to];
+        renderMap();
+      }, clock)
+    );
+  });
+
+  replayTimers.push(
+    setTimeout(() => {
+      Object.keys(original).forEach((id) => {
+        const node = nodeById(id);
+        if (node) node.status = original[id];
+      });
+      stopReplay();
+    }, clock + step)
+  );
+}
+
 /* -------------------------------------------------------------------- flags */
 
-const state = {kinds: new Set(), openFlags: new Set()};
-
 function visibleFindings() {
-  const findings = DATA.findings || [];
-  if (state.kinds.size === 0) return findings;
-  return findings.filter((finding) => state.kinds.has(finding.kind));
+  let findings = DATA.findings || [];
+  if (state.node) findings = findings.filter((finding) => finding.node === state.node);
+  if (state.kinds.size) findings = findings.filter((finding) => state.kinds.has(finding.kind));
+  return findings;
 }
 
 function renderFilters() {
   const bar = $("#filters");
   bar.innerHTML = "";
-  const byKind = (DATA.counts || {}).by_kind || {};
+  const pool = state.node
+    ? (DATA.findings || []).filter((finding) => finding.node === state.node)
+    : DATA.findings || [];
+  const byKind = {};
+  pool.forEach((finding) => {
+    byKind[finding.kind] = (byKind[finding.kind] || 0) + 1;
+  });
   const kinds = Object.keys(byKind).sort((a, b) => byKind[b] - byKind[a]);
+
+  if (state.node) {
+    const node = nodeById(state.node);
+    bar.appendChild(
+      el("button", {class: "chip is-node", "aria-pressed": "true", "data-clear-node": "1"}, [
+        el("span", {class: "dot"}),
+        el("span", {text: node ? node.component + " " + node.label : state.node}),
+        el("span", {class: "count num", text: "×"}),
+      ])
+    );
+  }
 
   bar.appendChild(
     el(
@@ -663,10 +1343,9 @@ function renderFilters() {
       {
         class: "chip",
         "aria-pressed": state.kinds.size === 0,
-        onclick: "",
         "data-kind": "",
       },
-      [el("span", {text: "All"}), el("span", {class: "count num", text: String((DATA.findings || []).length)})]
+      [el("span", {text: "All"}), el("span", {class: "count num", text: String(pool.length)})]
     )
   );
 
@@ -690,6 +1369,10 @@ function renderFilters() {
 
   bar.querySelectorAll("button").forEach((button) => {
     button.addEventListener("click", () => {
+      if (button.hasAttribute("data-clear-node")) {
+        selectNode(null);
+        return;
+      }
       const kind = button.getAttribute("data-kind");
       if (!kind) state.kinds.clear();
       else if (state.kinds.has(kind)) state.kinds.delete(kind);
@@ -740,6 +1423,7 @@ function flagCard(finding) {
     const isOpen = state.openFlags.has(finding.id);
     card.classList.toggle("is-open", isOpen);
     header.setAttribute("aria-expanded", String(isOpen));
+    if (isOpen) highlightNode(finding.node);
   });
 
   card.appendChild(header);
@@ -1048,10 +1732,26 @@ function renderFooter() {
 /* --------------------------------------------------------------------- boot */
 
 renderMasthead();
+renderMap();
+renderLegend();
 renderFilters();
 renderFlags();
 renderPrs();
 renderFooter();
+
+$("#replay-run").addEventListener("click", replay);
+$("#clear-node").addEventListener("click", () => selectNode(null));
+
+/* The two layouts are chosen by width, so a resize past the threshold re-lays the map
+   rather than scaling one layout into illegibility. */
+let lastPlan = layout();
+window.addEventListener("resize", () => {
+  const plan = layout();
+  if (plan !== lastPlan) {
+    lastPlan = plan;
+    renderMap();
+  }
+});
 </script>
 </body>
 </html>
