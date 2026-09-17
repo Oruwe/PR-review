@@ -133,14 +133,23 @@ class Finding:
 ### llm.py
 
 ```python
+Provider = Callable[[str, int, float], str]   # prompt, max_tokens, temperature -> text
+
 def complete(prompt: str, *, model: str, max_tokens: int = 4096,
-             temperature: float = 0.0) -> str:
-    """Bedrock call, content-addressed cache at .cache/llm/<sha256>.json.
-    Cache hit → zero network. Records token counts to .cache/llm/usage.jsonl."""
+             temperature: float = 0.0, provider: Provider | None = None) -> str:
+    """Content-addressed cache at .cache/llm/<sha256>.json. On a cache hit the provider
+    is never called. Records token counts to .cache/llm/usage.jsonl.
+    provider defaults to providers.bedrock_provider()."""
 
 def embed(texts: list[str]) -> list[list[float]]:
     """sentence-transformers all-MiniLM-L6-v2, local. Cached the same way."""
 ```
+
+`providers.py` holds `bedrock_provider()`. Keeping the provider injectable means C0 can be
+built and tested before AWS credentials exist, and swapping models later is one line.
+
+**Note on the no-mock rule:** it bans mocking Docker, git and the target repo — the things
+this system reasons about. Stubbing the *provider boundary* to test caching is intended.
 
 **Acceptance (C0):** `pytest tests/test_models.py` — `Job.idempotency_key` is stable across
 two constructions with equal fields and differs when any field differs; `Finding` with

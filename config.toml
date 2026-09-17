@@ -1,0 +1,4 @@
+[target]
+slug = "psf/requests"          # replace with your target repo choice
+fork = "your-github-username/requests"
+package_root = "src/requests"
