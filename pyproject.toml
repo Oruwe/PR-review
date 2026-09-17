@@ -20,7 +20,7 @@ prflagger = "prflagger.cli:main"
 
 [project.optional-dependencies]
 embed = ["sentence-transformers"]
-dev = ["pytest", "ruff", "mypy"]
+dev = ["pytest", "ruff", "mypy", "types-networkx"]
 
 [tool.setuptools.packages.find]
 include = ["prflagger*"]
