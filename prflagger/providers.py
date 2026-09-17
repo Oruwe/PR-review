@@ -20,6 +20,9 @@ __all__ = ["DEFAULT_MODEL", "bedrock_provider"]
 
 # Bedrock model ids carry an "anthropic." prefix. Override per call via
 # `llm.complete(model=...)`, or environment-wide via PRFLAGGER_BEDROCK_MODEL.
+#
+# Credentials come from boto3's normal chain: an access key pair, or a Bedrock API key
+# in AWS_BEARER_TOKEN_BEDROCK. Nothing is read from this repository.
 DEFAULT_MODEL = "anthropic.claude-opus-5"
 
 _ANTHROPIC_BEDROCK_VERSION = "bedrock-2023-05-31"
@@ -32,7 +35,9 @@ def bedrock_provider(model: str | None = None, *, region: str | None = None) -> 
     never called on a cache hit — `llm.complete` owns the cache.
     """
     model_id = model or os.environ.get("PRFLAGGER_BEDROCK_MODEL") or DEFAULT_MODEL
-    aws_region = region or os.environ.get("AWS_REGION") or "us-east-1"
+    # Leave the region to boto3's own resolution chain when nothing is given, so
+    # ~/.aws/config is honoured rather than silently overridden.
+    aws_region = region or os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
 
     def _invoke(prompt: str, max_tokens: int, temperature: float) -> str:
         import boto3  # imported lazily so importing this module needs no AWS deps
