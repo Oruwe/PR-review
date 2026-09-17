@@ -167,6 +167,9 @@ def test_skipped_tests_are_not_counted_as_failures() -> None:
     assert projected["tests_failed"] == 1
     assert projected["tests_skipped"] == 1
     assert projected["failed_nodeids"] == ["t.py::b"]
+    # The whole per-test map would outweigh the log it belongs to; the counts and the
+    # failing nodeids are what the page reads, and the job cache keeps the rest.
+    assert "per_test" not in projected
 
 
 def test_the_machine_report_line_is_replaced_rather_than_replayed() -> None:
@@ -176,6 +179,18 @@ def test_the_machine_report_line_is_replaced_rather_than_replayed() -> None:
     assert projected["lines"][1]["omitted"] is True
     assert "pytest json report" in projected["lines"][1]["text"]
     assert "xxxx" not in projected["lines"][1]["text"]
+
+
+def test_the_report_is_split_off_even_when_welded_to_a_test_line() -> None:
+    # pytest writes the report without a leading newline, so it normally arrives stuck
+    # to the end of the last test's line. Left alone it would be a megabyte of one line.
+    report = '{"created": 1.0, "tests": [' + "x" * 5000 + "]}"
+    welded = "tests/test_style.py::test_ansi PASSED [100%]" + report
+    projected = run(Outcome.PASSED, ((6.27, welded),)).as_dict()
+    assert projected["lines"][0]["text"] == "tests/test_style.py::test_ansi PASSED [100%]"
+    assert projected["lines"][0]["t"] == 6.27
+    assert projected["lines"][1]["omitted"] is True
+    assert "xxxx" not in json.dumps(projected["lines"])
 
 
 def test_line_times_are_kept_so_the_replay_can_be_a_replay() -> None:
