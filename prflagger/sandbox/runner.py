@@ -23,6 +23,7 @@ from typing import Any
 
 import structlog
 
+from prflagger.gitsafety import assert_safe_revision
 from prflagger.models import Job, Outcome, TestResult
 
 __all__ = [
@@ -493,6 +494,7 @@ def bare_clone(slug: str, *, url: str | None = None) -> Path:
 
 def worktree_for(slug: str, commit: str, *, url: str | None = None) -> Path:
     """`git worktree add` per commit. Never shared between concurrent jobs."""
+    assert_safe_revision(commit)
     bare = bare_clone(slug, url=url)
     path = cache_root() / "worktrees" / slug.replace("/", "__") / commit
     if path.is_dir():
