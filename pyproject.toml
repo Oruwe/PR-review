@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prflagger"
+version = "0.1.0"
+description = "A PR verification agent that reports facts with evidence"
+requires-python = ">=3.11"
+dependencies = [
+    "boto3",
+    "structlog",
+]
+
+[project.optional-dependencies]
+embed = ["sentence-transformers"]
+dev = ["pytest", "ruff", "mypy"]
+
+[tool.setuptools.packages.find]
+include = ["prflagger*"]
+
+[tool.ruff]
+line-length = 96
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "T20"]
+
+[tool.ruff.lint.per-file-ignores]
+"prflagger/cli.py" = ["T20"]
+"tests/*" = ["T20"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["prflagger"]
+
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*", "sentence_transformers.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
