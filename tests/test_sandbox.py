@@ -231,9 +231,18 @@ def test_run_argv_is_the_invocation_the_spec_mandates(
 
 
 def test_calibrate_derives_caps_from_a_real_run(
-    head_worktree: Path, head_sha: str, spy: DockerSpy
+    head_worktree: Path,
+    head_sha: str,
+    spy: DockerSpy,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from prflagger.sandbox import calibrate as calibration
+
+    # A fresh cache root, so "the first calibration" is first by construction rather
+    # than by whatever an earlier run happened to leave on disk. The image is keyed by
+    # content and already built, so this does not trigger a rebuild.
+    monkeypatch.setenv("PRFLAGGER_CACHE_DIR", str(tmp_path))
 
     memory_mb, timeout_s = calibration.calibrate(head_worktree, head_sha)
 
