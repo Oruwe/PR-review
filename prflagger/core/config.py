@@ -18,7 +18,15 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
-__all__ = ["BudgetConfig", "Config", "RepoConfig", "ServerConfig", "load", "cache_root"]
+__all__ = [
+    "BudgetConfig",
+    "CharterConfig",
+    "Config",
+    "RepoConfig",
+    "ServerConfig",
+    "cache_root",
+    "load",
+]
 
 _CACHE_ENV = "PRFLAGGER_CACHE_DIR"
 
@@ -98,6 +106,27 @@ class SandboxConfig:
 
 
 @dataclass(frozen=True)
+class CharterConfig:
+    """When a change to a repository counts as major.
+
+    Every threshold is a statement about the repository's charter — what it
+    exposes, what it says it is for — never about code style or size alone. A
+    thousand-line refactor that leaves the public surface and the stated purpose
+    intact is not a major update; deleting a fifth of the public API is.
+    """
+
+    api_removed_major_fraction: float = 0.2
+    api_removed_major_count: int = 10
+    api_added_notable_fraction: float = 0.3
+    purpose_major_similarity: float = 0.6
+    purpose_notable_similarity: float = 0.9
+    #: Lowest level sent to the outbound webhook. Everything is recorded; this only
+    #: decides what interrupts someone.
+    webhook_min_level: str = "major"
+    refresh_on_branch_move: bool = True
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     """The web surface."""
 
@@ -121,6 +150,7 @@ class Config:
     models: ModelConfig = field(default_factory=ModelConfig)
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
+    charter: CharterConfig = field(default_factory=CharterConfig)
     source: Path | None = None
 
     def repo(self, slug: str) -> RepoConfig:
@@ -211,5 +241,6 @@ def load(path: Path | str = "config.toml") -> Config:
         models=_build(ModelConfig, _section(data, "models")),
         sandbox=_build(SandboxConfig, _section(data, "sandbox")),
         server=_build(ServerConfig, _section(data, "server")),
+        charter=_build(CharterConfig, _section(data, "charter")),
         source=source,
     )

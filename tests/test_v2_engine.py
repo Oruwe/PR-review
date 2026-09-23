@@ -278,3 +278,9 @@ def test_the_pipeline_finds_the_undeclared_change(
     assert coverage["complete"] is False
     assert any("adjudication" in entry["what"] for entry in coverage["skipped"])
     assert any("behavioural comparison" in entry for entry in coverage["verified"])
+
+    # Every finding is placed against this repository's own charter, and the run
+    # says that is what it was judged against.
+    assert all(o.relevance in ("core", "supporting", "peripheral") for o in observations)
+    assert behaviour[0].relevance == "core"
+    assert any("demo/shoplib's own charter" in entry for entry in coverage["verified"])

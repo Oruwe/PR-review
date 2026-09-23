@@ -9,12 +9,18 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from typing import Any
 
 from prflagger.core.models import (
+    DRIFT_LEVELS,
     TERMINAL_STATES,
     Adjudication,
+    Charter,
+    CharterDrift,
     Citation,
+    Claim,
+    Notification,
     Observation,
     PullRequest,
     Repo,
@@ -82,8 +88,12 @@ class Store:
             (sha, time.time(), slug),
         )
 
+    def set_branch_head(self, slug: str, sha: str) -> None:
+        self.db.execute("UPDATE repos SET branch_head = ? WHERE slug = ?", (sha, slug))
+
     @staticmethod
     def _repo(row: Any) -> Repo:
+        keys = row.keys()
         return Repo(
             slug=row["slug"],
             default_branch=row["default_branch"],
@@ -91,6 +101,8 @@ class Store:
             package_roots=tuple(_loads(row["package_roots"], [])),
             added_at=row["added_at"],
             atlas_sha=row["atlas_sha"],
+            charter_sha=row["charter_sha"] if "charter_sha" in keys else "",
+            branch_head=row["branch_head"] if "branch_head" in keys else "",
         )
 
     # -- pulls ----------------------------------------------------------------
@@ -281,13 +293,18 @@ class Store:
         self.db.executemany(
             """
             INSERT INTO observations (id, run_id, kind, symbol, what_changed, how_we_know,
-                                      evidence_ref, severity, confidence, rank_score)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET rank_score = excluded.rank_score
+                                      evidence_ref, severity, confidence, rank_score,
+                                      relevance, relevance_note)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                rank_score = excluded.rank_score,
+                relevance = excluded.relevance,
+                relevance_note = excluded.relevance_note
             """,
             [
                 (o.id, o.run_id, o.kind, o.symbol, o.what_changed, o.how_we_know,
-                 o.evidence_ref, o.severity, o.confidence, o.rank_score)
+                 o.evidence_ref, o.severity, o.confidence, o.rank_score,
+                 o.relevance, o.relevance_note)
                 for o in observations
             ],
         )
@@ -303,6 +320,7 @@ class Store:
                 what_changed=r["what_changed"], how_we_know=r["how_we_know"],
                 evidence_ref=r["evidence_ref"], severity=r["severity"],
                 confidence=r["confidence"], rank_score=r["rank_score"],
+                relevance=r["relevance"], relevance_note=r["relevance_note"],
             )
             for r in rows
         ]
@@ -435,3 +453,193 @@ class Store:
             return None
         payload = _loads(row["payload"], None)
         return payload if isinstance(payload, dict) else None
+
+    # -- the repository's memory of itself ------------------------------------
+
+    def put_charter(self, charter: Charter) -> Charter:
+        """Store a charter, numbering it per repository. Idempotent per commit."""
+        existing = self.charter(charter.repo, charter.sha)
+        if existing is not None:
+            return existing
+        number = int(
+            self.db.scalar(
+                "SELECT MAX(number) FROM charters WHERE repo = ?", (charter.repo,), default=0
+            ) or 0
+        ) + 1
+        stored = replace(charter, number=number, built_at=charter.built_at or time.time())
+        self.db.execute(
+            "INSERT INTO charters (repo, sha, number, built_at, payload)"
+            " VALUES (?, ?, ?, ?, ?)",
+            (stored.repo, stored.sha, number, stored.built_at, json_col(_charter_dict(stored))),
+        )
+        self.db.execute(
+            "UPDATE repos SET charter_sha = ? WHERE slug = ?", (stored.sha, stored.repo)
+        )
+        return stored
+
+    def charter(self, repo: str, sha: str | None = None) -> Charter | None:
+        """This repository's charter — at `sha`, or its latest. Never another's."""
+        if sha:
+            row = self.db.one(
+                "SELECT * FROM charters WHERE repo = ? AND sha = ?", (repo, sha)
+            )
+        else:
+            row = self.db.one(
+                "SELECT * FROM charters WHERE repo = ? ORDER BY number DESC LIMIT 1", (repo,)
+            )
+        if row is None:
+            return None
+        charter = _charter_from(_loads(row["payload"], {}), row)
+        if charter.repo != repo:  # pragma: no cover - the WHERE clause makes this impossible
+            raise RuntimeError(f"charter for {charter.repo!r} returned for {repo!r}")
+        return charter
+
+    def charter_history(self, repo: str, limit: int = 50) -> list[dict[str, Any]]:
+        return [
+            {"number": r["number"], "sha": r["sha"], "built_at": r["built_at"]}
+            for r in self.db.query(
+                "SELECT number, sha, built_at FROM charters WHERE repo = ? "
+                "ORDER BY number DESC LIMIT ?",
+                (repo, limit),
+            )
+        ]
+
+    def put_charter_change(self, drift: CharterDrift) -> int:
+        cursor = self.db.execute(
+            "INSERT INTO charter_changes (repo, from_sha, to_sha, level, signals, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                drift.repo, drift.from_sha, drift.to_sha, drift.level,
+                json_col([s.__dict__ for s in drift.signals]), time.time(),
+            ),
+        )
+        return int(cursor.lastrowid or 0)
+
+    def charter_changes(self, repo: str, limit: int = 50) -> list[dict[str, Any]]:
+        return [
+            {
+                "id": r["id"], "from_sha": r["from_sha"], "to_sha": r["to_sha"],
+                "level": r["level"], "signals": _loads(r["signals"], []),
+                "created_at": r["created_at"],
+            }
+            for r in self.db.query(
+                "SELECT * FROM charter_changes WHERE repo = ? ORDER BY id DESC LIMIT ?",
+                (repo, limit),
+            )
+        ]
+
+    def set_run_charter_impact(self, run_id: str, level: str) -> None:
+        self.db.execute("UPDATE runs SET charter_impact = ? WHERE id = ?", (level, run_id))
+
+    def run_charter_impact(self, run_id: str) -> str:
+        return str(
+            self.db.scalar(
+                "SELECT charter_impact FROM runs WHERE id = ?", (run_id,), default=""
+            )
+        )
+
+    # -- notifications --------------------------------------------------------
+
+    def put_notification(self, notification: Notification) -> bool:
+        """Record a notification. False if this exact one already exists.
+
+        Ids are derived from (repo, kind, sha), so the same update seen twice —
+        a restart, a second poll — never notifies twice.
+        """
+        cursor = self.db.execute(
+            """
+            INSERT OR IGNORE INTO notifications
+                (id, repo, kind, level, title, body, sha, evidence, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                notification.id, notification.repo, notification.kind, notification.level,
+                notification.title, notification.body, notification.sha,
+                json_col(list(notification.evidence)),
+                notification.created_at or time.time(),
+            ),
+        )
+        return bool(cursor.rowcount)
+
+    def notifications(
+        self,
+        *,
+        repo: str | None = None,
+        open_only: bool = False,
+        min_level: str = "none",
+        limit: int = 100,
+    ) -> list[Notification]:
+        floor = DRIFT_LEVELS.index(min_level)
+        wanted = [level for level in DRIFT_LEVELS if DRIFT_LEVELS.index(level) >= floor]
+        sql = f"SELECT * FROM notifications WHERE level IN ({','.join('?' * len(wanted))})"
+        params: list[Any] = list(wanted)
+        if repo:
+            sql += " AND repo = ?"
+            params.append(repo)
+        if open_only:
+            sql += " AND acknowledged_at IS NULL"
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(limit)
+        return [
+            Notification(
+                id=r["id"], repo=r["repo"], kind=r["kind"], level=r["level"],
+                title=r["title"], body=r["body"], sha=r["sha"],
+                created_at=r["created_at"], acknowledged_at=r["acknowledged_at"],
+                evidence=tuple(_loads(r["evidence"], [])),
+            )
+            for r in self.db.query(sql, params)
+        ]
+
+    def acknowledge(self, notification_id: str) -> bool:
+        cursor = self.db.execute(
+            "UPDATE notifications SET acknowledged_at = ? "
+            "WHERE id = ? AND acknowledged_at IS NULL",
+            (time.time(), notification_id),
+        )
+        return bool(cursor.rowcount)
+
+    def record_delivery(self, notification_id: str, delivery: dict[str, Any]) -> None:
+        self.db.execute(
+            "UPDATE notifications SET delivery = ? WHERE id = ?",
+            (json_col(delivery), notification_id),
+        )
+
+
+def _charter_dict(charter: Charter) -> dict[str, Any]:
+    return {
+        "repo": charter.repo, "sha": charter.sha, "name": charter.name,
+        "summary": charter.summary,
+        "claims": [
+            {"kind": c.kind, "text": c.text, "source": c.source} for c in charter.claims
+        ],
+        "version": charter.version, "license": charter.license,
+        "toolchain": charter.toolchain, "entry_points": list(charter.entry_points),
+        "modules": [list(m) for m in charter.modules],
+        "public_api": list(charter.public_api), "dependencies": list(charter.dependencies),
+        "standards": list(charter.standards),
+    }
+
+
+def _charter_from(data: dict[str, Any], row: Any) -> Charter:
+    return Charter(
+        repo=str(data.get("repo") or row["repo"]),
+        sha=str(data.get("sha") or row["sha"]),
+        name=str(data.get("name", "")),
+        summary=str(data.get("summary", "")),
+        claims=tuple(
+            Claim(kind=c["kind"], text=c["text"], source=c["source"])
+            for c in data.get("claims", [])
+        ),
+        version=str(data.get("version", "")),
+        license=str(data.get("license", "")),
+        toolchain=str(data.get("toolchain", "")),
+        entry_points=tuple(data.get("entry_points", [])),
+        modules=tuple(
+            (str(m[0]), str(m[1]), str(m[2])) for m in data.get("modules", []) if len(m) == 3
+        ),
+        public_api=tuple(data.get("public_api", [])),
+        dependencies=tuple(data.get("dependencies", [])),
+        standards=tuple(data.get("standards", [])),
+        built_at=float(row["built_at"]),
+        number=int(row["number"]),
+    )

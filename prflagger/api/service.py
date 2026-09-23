@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import structlog
 
+from prflagger.charter.keeper import CharterKeeper
 from prflagger.core.config import Config, load
 from prflagger.engine.janitor import disk_free_ratio, sweep
+from prflagger.engine.notify import Notifier
 from prflagger.engine.recovery import recover
 from prflagger.engine.scheduler import Scheduler
 from prflagger.engine.watcher import Watcher
@@ -44,8 +46,11 @@ class Service:
     scheduler: Scheduler
     watcher: Watcher
     github: GitHub
+    notifier: Notifier
+    keeper: CharterKeeper
     started: bool = False
     janitor: asyncio.Task[None] | None = None
+    _background: set[asyncio.Task[object]] = field(default_factory=set)
 
     @classmethod
     def build(cls, config: Config | None = None, *, db_path: Path | None = None) -> Service:
@@ -54,14 +59,33 @@ class Service:
         store = Store(db)
         bus = EventBus(db)
         pool = SandboxPool(config, bus)
-        worker = RunWorker(config, store, bus, pool)
+        notifier = Notifier(config, store, bus)
+        worker = RunWorker(config, store, bus, pool, notifier)
         scheduler = Scheduler(config, store, bus, worker)
         github = GitHub()
-        watcher = Watcher(config, store, bus, scheduler, github)
+        keeper = CharterKeeper(config, store, bus, notifier)
+        watcher = Watcher(config, store, bus, scheduler, github, keeper=keeper)
         return cls(
             config=config, db=db, store=store, bus=bus, pool=pool, worker=worker,
-            scheduler=scheduler, watcher=watcher, github=github,
+            scheduler=scheduler, watcher=watcher, github=github, notifier=notifier,
+            keeper=keeper,
         )
+
+    def remember(self, slug: str) -> None:
+        """Build a repository's first charter in the background, if it has none.
+
+        A repository the service has no memory of cannot have its pull requests
+        judged against what it is for, so a new one is read immediately rather
+        than on the next branch movement.
+        """
+        repo = self.store.repo(slug)
+        if repo is None or repo.charter_sha:
+            return
+        task = asyncio.create_task(
+            self.keeper.refresh(slug, reason="first reading"), name=f"pf-charter-{slug}"
+        )
+        self._background.add(task)
+        task.add_done_callback(self._background.discard)
 
     async def start(self, *, watch: bool = True) -> None:
         """Bring the engine up, repairing anything the last shutdown left behind."""
@@ -71,6 +95,8 @@ class Service:
         if watch:
             await self.watcher.start()
         self.janitor = asyncio.create_task(self._sweep_periodically(), name="pf-janitor")
+        for repo in self.store.repos():
+            self.remember(repo.slug)
         self.started = True
         self.bus.emit("service.started", workers=self.pool.capacity, watching=watch)
         log.info("service.started", workers=self.pool.capacity, watching=watch)
@@ -87,6 +113,8 @@ class Service:
                 log.exception("janitor.failed")
 
     async def stop(self) -> None:
+        for task in list(self._background):
+            task.cancel()
         if self.janitor is not None:
             self.janitor.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -111,4 +139,6 @@ class Service:
             "github_rate_remaining": self.github.remaining,
             "last_poll_at": self.watcher.last_poll_at,
             "disk_free_ratio": round(disk_free_ratio(), 4),
+            "open_major": len(self.store.notifications(open_only=True, min_level="major")),
+            "webhook_configured": self.notifier.webhook_configured,
         }

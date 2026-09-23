@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "prflagger"
 version = "0.1.0"
-description = "A PR verification agent that reports facts with evidence"
+description = "An always-on pull-request verification service that reports facts with evidence"
 requires-python = ">=3.11"
 dependencies = [
     "anthropic",

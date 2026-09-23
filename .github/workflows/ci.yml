@@ -63,6 +63,7 @@ jobs:
           pytest -q --durations=10 \
             tests/test_models.py tests/test_v2_storage.py tests/test_v2_lang.py \
             tests/test_v2_api.py tests/test_v2_scheduler.py tests/test_v2_janitor.py \
+            tests/test_v2_charter.py \
             tests/test_analysis.py tests/test_privacy.py tests/test_gitsafety.py
 
   # Stage 3 — real containers. CLAUDE.md forbids mocking Docker, so this is the
@@ -123,7 +124,7 @@ jobs:
             sleep 1
           done
           curl -fsS http://127.0.0.1:8123/api/health | tee /dev/stderr | grep -q '"started":true'
-          for path in / /api/repos /api/budget; do
+          for path in / /api/repos /api/budget /api/notifications; do
             code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8123$path")
             echo "$path -> $code"
             [ "$code" = "200" ] || { echo "::error::$path returned $code"; exit 1; }

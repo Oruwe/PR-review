@@ -20,7 +20,7 @@ from prflagger.core.models import Observation, Symbol
 from prflagger.lang.base import Toolchain, parse_lint
 from prflagger.probes.differential import SEVERITY
 
-__all__ = ["lint_observations", "surface_observations"]
+__all__ = ["lint_observations", "public_index", "surface_observations"]
 
 log = structlog.get_logger(__name__)
 
@@ -53,16 +53,28 @@ def _roots(tree: Path, package_roots: tuple[str, ...]) -> list[Path]:
     return [tree]
 
 
-def surface_observations(
-    run_id: str, base_tree: Path, head_tree: Path, package_roots: tuple[str, ...] = ()
-) -> list[Observation]:
-    """Public symbols added, removed, or moved between the two commits."""
+def public_index(tree: Path, package_roots: tuple[str, ...] = ()) -> dict[str, Symbol]:
+    """Public symbols at one commit, repo-relative. Shared by the surface probe and
+    the charter, so a run parses each commit once rather than twice."""
     try:
-        base = _index(base_tree, package_roots)
-        head = _index(head_tree, package_roots)
+        return _index(tree, package_roots)
     except (OSError, RecursionError) as error:
         log.warning("surface.unavailable", error=str(error)[:200])
-        return []
+        return {}
+
+
+def surface_observations(
+    run_id: str,
+    base_tree: Path,
+    head_tree: Path,
+    package_roots: tuple[str, ...] = (),
+    *,
+    base_index: dict[str, Symbol] | None = None,
+    head_index: dict[str, Symbol] | None = None,
+) -> list[Observation]:
+    """Public symbols added, removed, or moved between the two commits."""
+    base = base_index if base_index is not None else public_index(base_tree, package_roots)
+    head = head_index if head_index is not None else public_index(head_tree, package_roots)
     if not base and not head:
         return []
 

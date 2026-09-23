@@ -18,6 +18,7 @@ from dataclasses import replace
 
 import structlog
 
+from prflagger.charter.keeper import CharterKeeper
 from prflagger.core.config import Config
 from prflagger.core.errors import RepoUnavailable
 from prflagger.engine.scheduler import Scheduler
@@ -40,12 +41,15 @@ class Watcher:
         bus: EventBus,
         scheduler: Scheduler,
         github: GitHub | None = None,
+        *,
+        keeper: CharterKeeper | None = None,
     ) -> None:
         self._config = config
         self._store = store
         self._bus = bus
         self._scheduler = scheduler
         self._github = github or GitHub()
+        self._keeper = keeper
         self._task: asyncio.Task[None] | None = None
         self._stopping = False
         self._unpollable: set[str] = set()
@@ -86,6 +90,14 @@ class Watcher:
             entry = self._config.repo(repo.slug)
             if not entry.watch:
                 continue
+            # The default branch first: if the repository itself moved, its memory
+            # is rebuilt before any of its pull requests are judged against it.
+            # This works for every source git can reach, not just GitHub.
+            if self._keeper is not None:
+                try:
+                    await self._keeper.check(repo.slug)
+                except Exception:  # noqa: BLE001 - one repo's failure must not stop the sweep
+                    log.exception("watcher.charter_check_failed", repo=repo.slug)
             if entry.clone_url and not entry.clone_url.startswith("https://github.com/"):
                 # Cloned from somewhere GitHub does not know about, so there is
                 # no pull-request list to poll. Runs for it start on request.

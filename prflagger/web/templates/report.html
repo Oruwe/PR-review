@@ -3,6 +3,7 @@
 {% block nav %}
   <a href="/repo/{{ run.repo }}">Map</a>
   <a href="/repo/{{ run.repo }}/prs">Pull requests</a>
+  <a href="/repo/{{ run.repo }}/changes">Changes</a>
   <a href="/runs/{{ run.id }}">Run</a>
   <a href="/runs/{{ run.id }}/report" aria-current="page">Report</a>
 {% endblock %}
@@ -26,6 +27,29 @@
     each item states what changed, how we know, and what in this repository makes it matter.
     Judgement is yours.</div>
 </div>
+
+{% if charter_impact.level in ('major', 'notable') %}
+<div class="finding {{ LEVEL_STATUS[charter_impact.level] }}" style="margin-bottom:18px">
+  <header>
+    <span class="chip {{ LEVEL_STATUS[charter_impact.level] }}"><span class="dot"></span>{{ charter_impact.level }} charter impact</span>
+    <strong>This pull request would change what {{ run.repo }} is, not only its code.</strong>
+  </header>
+  <ul class="claims">
+    {% for sig in charter_impact.signals %}
+    {% if sig.level in ('notable', 'major') %}
+    <li><span class="chip {{ LEVEL_STATUS.get(sig.level, 'neutral') }}"><span class="dot"></span>{{ sig.level }}</span>
+      <span class="text"><strong>{{ sig.detail }}</strong>
+        <div class="muted" style="font-size:.8rem;overflow-wrap:anywhere">{{ sig.evidence }}</div></span></li>
+    {% endif %}
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+{% if charter %}
+<p class="subtle" style="margin:-6px 0 16px">Judged only against {{ charter.name }}'s own charter
+  — “{{ charter.summary }}” (<a href="/repo/{{ run.repo }}">memory #{{ charter.number }}</a>).</p>
+{% endif %}
 
 <div class="stats" style="margin-bottom:20px">
   <div class="stat">
@@ -73,6 +97,10 @@
   <article class="finding {{ f.status }}" id="{{ f.id }}">
     <header>
       <span class="chip {{ f.status }}"><span class="dot"></span>{{ f.label }}</span>
+      {% if f.relevance %}
+      <span class="chip {{ RELEVANCE_STATUS.get(f.relevance, 'neutral') }}"
+            title="How close this is to what the repository says it is for"><span class="dot"></span>{{ f.relevance }}</span>
+      {% endif %}
       <span class="sym">{{ f.symbol }}</span>
       <span class="spacer" style="flex:1"></span>
       <span class="subtle" style="font-size:.76rem">
@@ -91,6 +119,11 @@
         {{ f.how_we_know }}
         {% if f.evidence_ref %}<div class="evidence" style="margin-top:6px">{{ f.evidence_ref }}</div>{% endif %}
       </dd>
+
+      {% if f.relevance_note %}
+      <dt>Why it matters here</dt>
+      <dd>{{ f.relevance_note }}</dd>
+      {% endif %}
 
       <dt>Repo standard</dt>
       <dd>

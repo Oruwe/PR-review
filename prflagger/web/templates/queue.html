@@ -3,6 +3,7 @@
 {% block nav %}
   <a href="/repo/{{ repo.slug }}">Map</a>
   <a href="/repo/{{ repo.slug }}/prs" aria-current="page">Pull requests</a>
+  <a href="/repo/{{ repo.slug }}/changes">Changes</a>
 {% endblock %}
 {% block content %}
 
@@ -50,6 +51,11 @@
                target="_blank" rel="noopener"><strong>#{{ r.number }}</strong></a>
             <span>{{ r.title }}</span>
             {% if r.draft %}<span class="pill">draft</span>{% endif %}
+            {% if r.charter_impact in ('major', 'notable') %}
+              <span class="chip {{ LEVEL_STATUS[r.charter_impact] }}"
+                    title="This pull request would change what the repository is, not just its code">
+                <span class="dot"></span>{% if r.charter_impact == 'major' %}changes what the repo is{% else %}changes the repo's surface{% endif %}</span>
+            {% endif %}
           </div>
           <div class="muted" style="font-size:.78rem;margin-top:3px">
             {{ r.author }} · <span style="color:var(--good-ink)">+{{ r.additions }}</span>

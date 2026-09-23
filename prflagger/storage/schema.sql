@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS repos (
     added_at        REAL NOT NULL,
     atlas_sha       TEXT NOT NULL DEFAULT '',
     atlas_built_at  REAL,
+    charter_sha     TEXT NOT NULL DEFAULT '',
+    branch_head     TEXT NOT NULL DEFAULT '',
     brain_built_at  REAL,
     last_polled_at  REAL,
     poll_etag       TEXT NOT NULL DEFAULT ''
@@ -59,7 +61,8 @@ CREATE TABLE IF NOT EXISTS runs (
     finished_at  REAL,
     error        TEXT NOT NULL DEFAULT '',
     usd_spent    REAL NOT NULL DEFAULT 0,
-    superseded_by TEXT
+    superseded_by TEXT,
+    charter_impact TEXT NOT NULL DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS runs_repo_pr ON runs (repo, pr_number, created_at DESC);
 CREATE INDEX IF NOT EXISTS runs_state   ON runs (state);
@@ -96,6 +99,8 @@ CREATE TABLE IF NOT EXISTS observations (
     confidence   REAL NOT NULL DEFAULT 0.5,
     rank_score   REAL NOT NULL DEFAULT 0,
     norm_id      TEXT,
+    relevance    TEXT NOT NULL DEFAULT '',
+    relevance_note TEXT NOT NULL DEFAULT '',
     FOREIGN KEY (run_id) REFERENCES runs(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS observations_run ON observations (run_id, rank_score DESC);
@@ -191,3 +196,45 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS events_run ON events (run_id, seq);
 CREATE INDEX IF NOT EXISTS events_ts  ON events (ts);
+
+-- The repository's memory of itself: one charter per (repo, commit), numbered
+-- per repository. Keyed by repo on every table, so one repository's memory can
+-- never be read in the course of judging another.
+CREATE TABLE IF NOT EXISTS charters (
+    repo       TEXT NOT NULL,
+    sha        TEXT NOT NULL,
+    number     INTEGER NOT NULL,
+    built_at   REAL NOT NULL,
+    payload    TEXT NOT NULL,
+    PRIMARY KEY (repo, sha)
+);
+CREATE INDEX IF NOT EXISTS charters_latest ON charters (repo, number DESC);
+
+-- Every time a repository's charter moved, how far, and the signals that said so.
+CREATE TABLE IF NOT EXISTS charter_changes (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    repo       TEXT NOT NULL,
+    from_sha   TEXT NOT NULL,
+    to_sha     TEXT NOT NULL,
+    level      TEXT NOT NULL,
+    signals    TEXT NOT NULL DEFAULT '[]',
+    created_at REAL NOT NULL
+);
+CREATE INDEX IF NOT EXISTS charter_changes_repo ON charter_changes (repo, created_at DESC);
+
+-- Things a person should know, graded. A major one stays visible until someone
+-- acknowledges it; that is what makes it different from a routine finding.
+CREATE TABLE IF NOT EXISTS notifications (
+    id              TEXT PRIMARY KEY,
+    repo            TEXT NOT NULL,
+    kind            TEXT NOT NULL,
+    level           TEXT NOT NULL,
+    title           TEXT NOT NULL,
+    body            TEXT NOT NULL DEFAULT '',
+    sha             TEXT NOT NULL DEFAULT '',
+    evidence        TEXT NOT NULL DEFAULT '[]',
+    created_at      REAL NOT NULL,
+    acknowledged_at REAL,
+    delivery        TEXT NOT NULL DEFAULT '{}'
+);
+CREATE INDEX IF NOT EXISTS notifications_open ON notifications (acknowledged_at, level);

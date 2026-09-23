@@ -22,14 +22,26 @@ from typing import Any
 
 import structlog
 
+from prflagger.charter.drift import compare, evidence_lines, headline
+from prflagger.charter.extract import extract_charter
+from prflagger.charter.relevance import WEIGHT, grounded
 from prflagger.core.config import Config
 from prflagger.core.ids import job_id
-from prflagger.core.models import Observation, Outcome, Run, RunState, TestResult
+from prflagger.core.models import (
+    Charter,
+    CharterDrift,
+    Observation,
+    Outcome,
+    Run,
+    RunState,
+    TestResult,
+)
+from prflagger.engine.notify import Notifier
 from prflagger.engine.states import can_transition, progress_of
 from prflagger.lang.base import Toolchain
 from prflagger.lang.detect import for_repo
 from prflagger.probes.differential import differential_observations, outcome_observations
-from prflagger.probes.surface import lint_observations, surface_observations
+from prflagger.probes.surface import lint_observations, public_index, surface_observations
 from prflagger.sandbox.pool import JobSpec, SandboxPool
 from prflagger.storage.events import EventBus
 from prflagger.storage.repos import Store
@@ -69,12 +81,18 @@ class RunWorker:
     """Executes runs. One instance, many runs, bounded by the sandbox pool."""
 
     def __init__(
-        self, config: Config, store: Store, bus: EventBus, pool: SandboxPool
+        self,
+        config: Config,
+        store: Store,
+        bus: EventBus,
+        pool: SandboxPool,
+        notifier: Notifier | None = None,
     ) -> None:
         self._config = config
         self._store = store
         self._bus = bus
         self._pool = pool
+        self._notifier = notifier
 
     # -- state ----------------------------------------------------------------
 
@@ -221,11 +239,17 @@ class RunWorker:
             )
         observations += outcome_observations(run.id, base, head)
 
-        # Public surface: structural, no sandbox needed.
+        # Public surface: structural, no sandbox needed. Each commit is indexed
+        # once and the index serves both this probe and the charter below.
+        roots = tuple(entry.package_roots)
+        base_index: dict[str, Any] = {}
+        head_index: dict[str, Any] = {}
         if toolchain.grammar == "python":
+            base_index = await _thread(public_index, base_tree, roots)
+            head_index = await _thread(public_index, head_tree, roots)
             surface = await _thread(
-                surface_observations, run.id, base_tree, head_tree,
-                tuple(entry.package_roots),
+                surface_observations, run.id, base_tree, head_tree, roots,
+                base_index=base_index, head_index=head_index,
             )
             observations += surface
             coverage.ok("public API surface compared by parsing both commits")
@@ -252,11 +276,103 @@ class RunWorker:
         else:
             coverage.skip("lint comparison", f"{toolchain.display} pack declares no linters")
 
+        observations = await self._ground(
+            run, coverage, observations, base_tree, head_tree, toolchain, roots,
+            base_index, head_index,
+        )
+
         coverage.skip(
             "adjudication against repo norms",
             "no model provider is configured for this run",
         )
         return observations
+
+    async def _ground(
+        self,
+        run: Run,
+        coverage: _Verification,
+        observations: list[Observation],
+        base_tree: Path,
+        head_tree: Path,
+        toolchain: Toolchain,
+        roots: tuple[str, ...],
+        base_index: dict[str, Any],
+        head_index: dict[str, Any],
+    ) -> list[Observation]:
+        """Judge every observation against this repository's own charter, and
+        measure how far the pull request would move that charter.
+
+        The charter used is the one at the pull request's *base* — the repository
+        as this change found it — built from that checkout alone. The stored
+        default-branch charter is the fallback. No other repository's memory is
+        reachable from here.
+        """
+        def build(tree: Path, sha: str, index: dict[str, Any]) -> Charter:
+            return extract_charter(
+                tree, slug=run.repo, sha=sha, toolchain=toolchain, package_roots=roots,
+                public_api=list(index) if index else None,
+            )
+
+        try:
+            base_charter: Charter | None = await _thread(
+                build, base_tree, run.base_sha, base_index
+            )
+            head_charter: Charter | None = await _thread(
+                build, head_tree, run.head_sha, head_index
+            )
+        except Exception as error:  # noqa: BLE001 - grounding is additive, never fatal
+            log.warning("charter.run_extract_failed", run=run.id, error=str(error)[:200])
+            base_charter = self._store.charter(run.repo)
+            head_charter = None
+
+        if base_charter is None:
+            coverage.skip(
+                "judging findings against the repository's charter",
+                "no charter could be built for this repository",
+            )
+            return observations
+
+        observations = grounded(observations, base_charter, repo=run.repo)
+        coverage.ok(
+            f"judged only against {run.repo}'s own charter at base "
+            f"{run.base_sha[:10]} ({len(base_charter.claims)} cited claims)"
+        )
+
+        if head_charter is not None:
+            drift = compare(base_charter, head_charter, self._config.charter)
+            self._store.set_run_charter_impact(run.id, drift.level)
+            self._bus.emit(
+                "run.charter_impact", run_id=run.id, repo=run.repo, level=drift.level,
+                signals=[s.__dict__ for s in drift.signals],
+            )
+            if drift.level != "none":
+                coverage.ok(
+                    f"charter impact measured: {drift.level} "
+                    f"({len(drift.signals)} "
+                    f"{'change' if len(drift.signals) == 1 else 'changes'} "
+                    f"to what the repository is)"
+                )
+            self._announce(run, drift)
+        return observations
+
+    def _announce(self, run: Run, drift: CharterDrift) -> None:
+        """A pull request that would change what the repository *is* is not a
+        routine finding, so it is announced like a major update — distinctly, and
+        once per head commit."""
+        if self._notifier is None or drift.level != "major":
+            return
+        top = headline(drift)
+        pull = self._store.pull(run.repo, run.pr_number)
+        title = pull.title if pull else f"#{run.pr_number}"
+        self._notifier.raise_(
+            repo=run.repo,
+            kind="pr.charter_change",
+            level="major",
+            title=f"PR #{run.pr_number} would change what {run.repo} is: {top.detail}",
+            body=f"“{title}” — {run.base_sha[:10]} → {run.head_sha[:10]}",
+            sha=run.head_sha,
+            evidence=evidence_lines(drift),
+        )
 
     async def _lint(
         self, run: Run, base_tree: Path, head_tree: Path, toolchain: Toolchain, entry: Any
@@ -323,11 +439,13 @@ class RunWorker:
     def _rank(self, run: Run, observations: list[Observation]) -> list[Observation]:
         """Order by what the reader should look at first.
 
-        score = confidence x severity x centrality
+        score = confidence x severity x centrality x relevance
 
-        Centrality is how many callers the touched symbol has, normalised. No
-        model is involved — SPEC.md § C10 requires ranking be deterministic, and
-        the same input must produce the same order twice.
+        Centrality is how many callers the touched symbol has, normalised.
+        Relevance is how close the finding sits to what this repository says it
+        is for (see `charter.relevance`). No model is involved — SPEC.md § C10
+        requires ranking be deterministic, and the same input must produce the
+        same order twice.
         """
         callers = self._store.caller_counts(run.repo)
         widest = max(callers.values(), default=0)
@@ -335,7 +453,8 @@ class RunWorker:
         for observation in observations:
             count = callers.get(observation.symbol, 0)
             centrality = 0.5 if widest == 0 else 0.5 + 0.5 * (count / widest)
-            score = observation.confidence * observation.severity * centrality
+            weight = WEIGHT.get(observation.relevance, 1.0)
+            score = observation.confidence * observation.severity * centrality * weight
             ranked.append(replace(observation, rank_score=round(score, 6)))
         # Tie-break on id so the order is total, not merely sorted.
         return sorted(ranked, key=lambda o: (-o.rank_score, o.id))

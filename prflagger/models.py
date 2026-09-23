@@ -10,11 +10,16 @@ from __future__ import annotations
 
 from prflagger.core.models import (
     Adjudication,
+    Charter,
+    CharterDrift,
     Citation,
+    Claim,
+    DriftSignal,
     Finding,
     Job,
     LogLine,
     Norm,
+    Notification,
     Observation,
     Outcome,
     PullRequest,
@@ -29,11 +34,16 @@ from prflagger.core.models import (
 
 __all__ = [
     "Adjudication",
+    "Charter",
+    "CharterDrift",
     "Citation",
+    "Claim",
+    "DriftSignal",
     "Finding",
     "Job",
     "LogLine",
     "Norm",
+    "Notification",
     "Observation",
     "Outcome",
     "PullRequest",

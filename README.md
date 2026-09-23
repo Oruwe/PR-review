@@ -20,6 +20,11 @@ added from the web interface.
 
 ## What you get
 
+**What it is for** — before anything else, the repository's own account of itself: its
+goal, who it is for, what it does, and the rules it sets itself. Every line of it is quoted
+from the repository's files with the file and line it came from; nothing is inferred and no
+model writes it. Pull requests are judged against this and nothing else.
+
 **The map** — what a repository *is*, before any pull request is considered. Modules sized
 by lines and coloured by churn, the dependency graph, hotspots with their factors broken
 out, the language split, which modules carry no tests, and the exact commands the repository
@@ -42,13 +47,41 @@ what the run could *not* check, and why.
 worktree base + head  →  build image (keyed on lockfiles, not commits)
                       →  run the suite at both commits, streaming
                       →  probe: behaviour delta, public surface, lint delta
-                      →  rank by confidence × severity × centrality
+                      →  place each finding against the repo's charter: core,
+                         supporting or peripheral to what the repository is for
+                      →  rank by confidence × severity × centrality × relevance
                       →  adjudicate against the repo's own norms   [needs a model]
 ```
 
 Every step emits events to an append-only log. The live view and the stored transcript are
 that same log replayed — so a tab opened at the end of a run shows what a tab opened at the
 start showed.
+
+## What it remembers about a repository
+
+Each watched repository has a **charter**: its name, summary, stated purpose, target
+(runtimes, platforms, audience), capabilities, entry points, public API, dependencies and
+the rules its own `CONTRIBUTING.md`, `CLAUDE.md` or `AGENTS.md` set. It is read from the
+repository's own files — `pyproject.toml`, `package.json`, `go.mod`, `Cargo.toml`, the
+README, module docstrings, the license — and every claim carries a `file:line` that exists.
+
+Memory is **per repository**. One repository's charter is never consulted for another's
+pull requests; the code refuses the comparison rather than relying on a caller not to ask.
+
+When the default branch moves, the charter is rebuilt at the new commit and compared with
+the last one. What changed decides how loudly you hear about it:
+
+| Level | What causes it | How you hear |
+|---|---|---|
+| **major** | purpose rewritten; toolchain or license changed; a new major version; a way of running it removed; a large share of the public API removed | a banner on every page until someone acknowledges it, and the webhook if configured |
+| **notable** | purpose reworded; public API grown or partly removed; dependencies dropped | an entry on the repository's *Changes* page |
+| **minor** | a dependency added, a standard tool changed, small wording edits | history only |
+
+A pull request that would itself cause a major change is flagged the same way: a chip in
+the queue, a section in its report, and a major notification. The thresholds live under
+`[charter]` in `config.toml`. The webhook address is a credential, so it is read only from
+`PRFLAGGER_NOTIFY_WEBHOOK` in the environment; its payload carries a Slack-compatible
+`text` field.
 
 ## Any repository
 

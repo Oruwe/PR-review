@@ -19,7 +19,13 @@ from enum import Enum
 
 __all__ = [
     "Adjudication",
+    "Charter",
+    "CharterDrift",
     "Citation",
+    "Claim",
+    "DRIFT_LEVELS",
+    "DriftSignal",
+    "Notification",
     "Finding",
     "Job",
     "LogLine",
@@ -177,6 +183,8 @@ class Repo:
     package_roots: tuple[str, ...] = ()
     added_at: float = 0.0
     atlas_sha: str = ""  # sha the current atlas was built from
+    charter_sha: str = ""  # sha the current charter was built from
+    branch_head: str = ""  # default-branch head last seen
 
     @property
     def owner(self) -> str:
@@ -291,6 +299,11 @@ class Observation:
     severity: float = 0.5
     confidence: float = 0.5
     rank_score: float = 0.0
+    #: How close this sits to what the repository is *for*, judged against its
+    #: own charter: "core", "supporting" or "peripheral". Empty until judged.
+    relevance: str = ""
+    #: Which charter element it touches, with that element's own source.
+    relevance_note: str = ""
 
     def __post_init__(self) -> None:
         if not self.what_changed:
@@ -387,3 +400,125 @@ class Suggestion:
             )
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError(f"Suggestion.confidence must be 0.0-1.0, got {self.confidence}")
+
+
+
+# ----------------------------------------------------------------------------------
+# The repository's memory of itself
+# ----------------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Claim:
+    """One thing the repository says about itself, and where it says it.
+
+    A claim with no source cannot be constructed. That is the whole guarantee of
+    the charter: nothing in the system's memory of a repository is inferred,
+    remembered from elsewhere, or made up — every line traces to a file and line
+    in that repository at that commit.
+    """
+
+    kind: str  # "summary" | "purpose" | "target" | "capability" | "constraint"
+    text: str
+    source: str  # "README.md:12", repo-relative
+
+    KINDS = ("summary", "purpose", "target", "capability", "constraint")
+
+    def __post_init__(self) -> None:
+        if self.kind not in self.KINDS:
+            raise ValueError(f"Claim.kind must be one of {self.KINDS}, got {self.kind!r}")
+        if not self.text.strip():
+            raise ValueError("Claim.text is required")
+        if not self.source or ":" not in self.source:
+            raise ValueError(
+                f"Claim.source must be a repo-relative path:line, got {self.source!r} — "
+                "a claim the repository did not make is not memory, it is invention"
+            )
+
+
+@dataclass(frozen=True)
+class Charter:
+    """What a repository is for, as it describes itself at one commit.
+
+    This is the system's memory of a repository, and the only thing a finding
+    about that repository may be judged against. It is built mechanically from
+    the repository's own files, keyed by repository and commit, and never mixed
+    with another repository's.
+    """
+
+    repo: str
+    sha: str
+    name: str
+    summary: str
+    claims: tuple[Claim, ...] = ()
+    version: str = ""
+    license: str = ""
+    toolchain: str = ""
+    entry_points: tuple[str, ...] = ()  # "name = target" — how the repo is used
+    modules: tuple[tuple[str, str, str], ...] = ()  # (module, first docstring line, source)
+    public_api: tuple[str, ...] = ()
+    dependencies: tuple[str, ...] = ()  # runtime dependency *names*, sorted
+    standards: tuple[str, ...] = ()  # declared tooling: "ruff", "mypy", ...
+    built_at: float = 0.0
+    number: int = 0  # 1 for the first charter of a repository, then increments
+
+    def claims_of(self, kind: str) -> tuple[Claim, ...]:
+        return tuple(c for c in self.claims if c.kind == kind)
+
+
+DRIFT_LEVELS = ("none", "minor", "notable", "major")
+
+
+@dataclass(frozen=True)
+class DriftSignal:
+    """One way a repository's charter moved between two commits."""
+
+    kind: str
+    level: str
+    detail: str
+    evidence: str = ""
+
+    def __post_init__(self) -> None:
+        if self.level not in DRIFT_LEVELS:
+            raise ValueError(f"DriftSignal.level must be one of {DRIFT_LEVELS}")
+
+
+@dataclass(frozen=True)
+class CharterDrift:
+    """How far a repository moved from what it was.
+
+    `level` is the highest level any signal reached, so a single major signal —
+    a public API removed wholesale, a major version bump — makes the update
+    major regardless of how quiet everything else was.
+    """
+
+    repo: str
+    from_sha: str
+    to_sha: str
+    signals: tuple[DriftSignal, ...] = ()
+
+    @property
+    def level(self) -> str:
+        if not self.signals:
+            return "none"
+        return max((s.level for s in self.signals), key=DRIFT_LEVELS.index)
+
+
+@dataclass(frozen=True)
+class Notification:
+    """Something a person should know, graded by how loudly to say it."""
+
+    id: str
+    repo: str
+    kind: str  # "repo.update" | "pr.charter_change"
+    level: str
+    title: str
+    body: str
+    sha: str = ""
+    created_at: float = 0.0
+    acknowledged_at: float | None = None
+    evidence: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.level not in DRIFT_LEVELS:
+            raise ValueError(f"Notification.level must be one of {DRIFT_LEVELS}")

@@ -41,6 +41,15 @@ python -m prflagger.cli check --repo <path> --base <sha> --head <sha>
 - **Partial verification is never presented as complete.** Every run carries a coverage
   statement naming what it checked and what it could not, with the reason. A probe that
   failed to run is a gap to report, not a silence.
+- **Repository memory comes only from the repository.** A `Charter` is built from the
+  repo's own files; every `Claim` cites a `file:line` that exists. No model writes it, and
+  nothing from outside the repo is added to it.
+- **Memory is per repository.** A charter only ever judges, or is compared with, its own
+  repository; `compare()` and `classify()` raise on a mismatch rather than trusting callers.
+- **Notification level follows what changed, not how much.** Only `major` interrupts (a
+  banner on every page until acknowledged, plus the webhook); `notable` is a feed entry;
+  `minor` is history only. The webhook URL comes from `PRFLAGGER_NOTIFY_WEBHOOK`, never
+  from a file in the repository.
 
 ## The four-field contract
 

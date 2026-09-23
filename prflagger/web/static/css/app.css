@@ -134,6 +134,49 @@ code, .mono { font-family: var(--mono); font-size: 0.86em; }
 .subtle { color: var(--ink-2); font-size: 0.88rem; }
 .muted { color: var(--ink-muted); }
 
+/* --------------------------------------------------------- major alerts -- */
+
+/* Deliberately unlike everything else on the page. A finding is routine; a
+   change to what a repository *is* must not look like one. It carries an icon
+   and a label, so the colour is never the only signal. */
+.alert-major { background: color-mix(in srgb, var(--critical) 10%, var(--surface));
+               border-bottom: 2px solid var(--critical); }
+.alert-row { max-width: 1280px; margin: 0 auto; padding: 11px 20px;
+             display: flex; gap: 12px; align-items: flex-start; }
+.alert-row + .alert-row { border-top: 1px solid color-mix(in srgb, var(--critical) 25%, transparent); }
+.alert-icon { color: var(--critical); font-size: 1.1rem; line-height: 1.3; flex: none; }
+.alert-body { flex: 1; min-width: 0; }
+.alert-title { font-weight: 600; overflow-wrap: anywhere; }
+.alert-title a { color: var(--ink); }
+.alert-tag { display: inline-block; font-size: 0.68rem; font-weight: 700; letter-spacing: 0.06em;
+             text-transform: uppercase; color: #fff; background: var(--critical);
+             border-radius: 4px; padding: 1px 6px; margin-right: 7px; vertical-align: 2px; }
+.alert-sub { color: var(--ink-2); font-size: 0.84rem; margin-top: 2px; overflow-wrap: anywhere; }
+.alert-ack { flex: none; }
+
+/* On a phone the banner must still be unmissable without eating the screen: the
+   title and the button stay, the explanatory line is one tap away on Changes. */
+@media (max-width: 720px) {
+  .alert-row { padding: 9px 14px; gap: 6px 8px; flex-wrap: wrap; }
+  .alert-body { flex: 1 1 calc(100% - 30px); }
+  .alert-title { font-size: 0.9rem; display: -webkit-box; -webkit-box-orient: vertical;
+                 -webkit-line-clamp: 3; line-clamp: 3; overflow: hidden; }
+  .alert-sub { display: none; }
+  .alert-ack { margin-left: 22px; padding: 4px 10px; font-size: 0.82rem; }
+}
+
+/* ------------------------------------------------------------- charter ---- */
+
+.claims { list-style: none; margin: 0; padding: 0; }
+.claims li { display: flex; gap: 10px; align-items: baseline; padding: 6px 0;
+             border-bottom: 1px solid var(--grid); }
+.claims li:last-child { border-bottom: none; }
+.claims .text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.claims .src { flex: none; font-family: var(--mono); font-size: 0.72rem; color: var(--ink-muted);
+               max-width: 40%; overflow-wrap: anywhere; text-align: right; }
+.charter-summary { font-size: 1.08rem; line-height: 1.45; margin: 2px 0 6px; }
+.facts { display: flex; flex-wrap: wrap; gap: 6px; }
+
 /* ----------------------------------------------------------------- cards -- */
 
 .card {

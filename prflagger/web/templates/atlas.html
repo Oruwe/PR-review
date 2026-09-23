@@ -3,6 +3,7 @@
 {% block nav %}
   <a href="/repo/{{ repo.slug }}" aria-current="page">Map</a>
   <a href="/repo/{{ repo.slug }}/prs">Pull requests</a>
+  <a href="/repo/{{ repo.slug }}/changes">Changes</a>
 {% endblock %}
 {% block content %}
 
@@ -17,6 +18,83 @@
   <span class="spacer"></span>
   <button id="rebuild" class="primary">{% if atlas %}Rebuild map{% else %}Build map{% endif %}</button>
 </div>
+
+
+{% if charter %}
+<div class="card" style="margin-bottom:18px">
+  <header>
+    <h2>What this repository is for</h2>
+    <span class="spacer"></span>
+    <a class="pill" href="/repo/{{ repo.slug }}/changes"
+       title="The system's memory of this repository, rebuilt whenever the default branch moves">
+      memory #{{ charter.number }} · {{ charter.sha[:10] }}</a>
+  </header>
+  <p class="subtle" style="margin:-6px 0 12px">Built only from this repository's own files. Every
+    line cites where it says so, and every pull request is judged against this — nothing else.</p>
+
+  {% if charter.summary %}
+  <p class="charter-summary">{{ charter.summary }}</p>
+  {% endif %}
+  <div class="facts" style="margin-bottom:14px">
+    <span class="pill">{{ charter.name }}{% if charter.version %} {{ charter.version }}{% endif %}</span>
+    {% if charter.license %}<span class="pill">{{ charter.license }}</span>{% endif %}
+    <span class="pill">{{ charter.public_api|length }} public symbols</span>
+    <span class="pill">{{ charter.dependencies|length }} runtime dependencies</span>
+    {% for s in charter.standards %}<span class="pill">{{ s }}</span>{% endfor %}
+  </div>
+
+  <div class="grid two">
+    {% for kind, heading in (("purpose", "Goal"), ("target", "Who and what it targets"),
+                              ("capability", "What it does"), ("constraint", "Rules it holds itself to")) %}
+    {% set items = charter.claims_of(kind) %}
+    <div>
+      <h3 style="margin-bottom:6px">{{ heading }}</h3>
+      {% if items %}
+      <ul class="claims">
+        {% for c in items[:8] %}
+        <li><span class="text">{{ c.text }}</span><span class="src">{{ c.source }}</span></li>
+        {% endfor %}
+      </ul>
+      {% if items|length > 8 %}
+      <details class="raw"><summary>{{ items|length - 8 }} more</summary>
+        <ul class="claims">{% for c in items[8:] %}
+          <li><span class="text">{{ c.text }}</span><span class="src">{{ c.source }}</span></li>
+        {% endfor %}</ul>
+      </details>
+      {% endif %}
+      {% else %}
+      <p class="muted" style="font-size:.86rem">The repository does not say.</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if charter.entry_points %}
+  <h3 style="margin:16px 0 6px">How it is used</h3>
+  {% for e in charter.entry_points %}<div class="evidence">{{ e }}</div>{% endfor %}
+  {% endif %}
+
+  {% if changes %}
+  <h3 style="margin:16px 0 6px">Recent changes to what it is</h3>
+  <ul class="claims">
+    {% for ch in changes %}
+    <li>
+      <span class="chip {{ LEVEL_STATUS.get(ch.level, 'neutral') }}"><span class="dot"></span>{{ ch.level }}</span>
+      <span class="text"><code>{{ ch.from_sha[:8] }}</code> → <code>{{ ch.to_sha[:8] }}</code>
+        · {{ ch.signals|length }} {{ 'signal' if ch.signals|length == 1 else 'signals' }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% elif atlas %}
+<div class="notice warning" style="margin-bottom:16px">
+  <span class="ico" aria-hidden="true">⚠</span>
+  <div><strong>No memory of this repository's purpose yet.</strong> Rebuild the map to read
+    its README, metadata and entry points. Until then, findings are ranked without knowing
+    what the repository is for.</div>
+</div>
+{% endif %}
 
 {% if not atlas %}
 <div class="card empty">

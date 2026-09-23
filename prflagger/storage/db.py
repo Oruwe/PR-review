@@ -32,7 +32,20 @@ __all__ = [
 log = structlog.get_logger(__name__)
 
 #: Bumped when `schema.sql` changes in a way an existing database needs applied.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+#: Columns added after a table first shipped. `CREATE TABLE IF NOT EXISTS` cannot
+#: add a column to a table that already exists, so a database created by an
+#: earlier version would otherwise keep the old shape and fail on the first query
+#: that names the new column. Each entry is applied only if the column is absent,
+#: which keeps migration idempotent: running it twice changes nothing.
+_ADDED_COLUMNS: tuple[tuple[int, str, str, str], ...] = (
+    (2, "repos", "charter_sha", "TEXT NOT NULL DEFAULT ''"),
+    (2, "repos", "branch_head", "TEXT NOT NULL DEFAULT ''"),
+    (2, "runs", "charter_impact", "TEXT NOT NULL DEFAULT ''"),
+    (2, "observations", "relevance", "TEXT NOT NULL DEFAULT ''"),
+    (2, "observations", "relevance_note", "TEXT NOT NULL DEFAULT ''"),
+)
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
@@ -87,6 +100,16 @@ class Database:
         """
         with self._lock:
             self._connection.executescript(_SCHEMA_PATH.read_text(encoding="utf-8"))
+            for _, table, column, declaration in _ADDED_COLUMNS:
+                existing = {
+                    row["name"]
+                    for row in self._connection.execute(f"PRAGMA table_info({table})")
+                }
+                if column not in existing:
+                    self._connection.execute(
+                        f"ALTER TABLE {table} ADD COLUMN {column} {declaration}"
+                    )
+                    log.info("db.column_added", table=table, column=column)
             current = self._connection.execute(
                 "SELECT MAX(version) AS v FROM schema_version"
             ).fetchone()["v"]

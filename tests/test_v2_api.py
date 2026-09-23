@@ -246,3 +246,87 @@ def test_the_budget_endpoint_reports_remaining_credit(
     assert payload["spent_usd"] == pytest.approx(0.0123)
     assert payload["remaining_usd"] == pytest.approx(payload["total_usd"] - 0.0123)
     assert payload["calls"] == 1
+
+
+# ----------------------------------------------------------------------------------
+# The repository's memory, and the banner that interrupts for a major update
+# ----------------------------------------------------------------------------------
+
+
+def _remember(service: Service) -> None:
+    from prflagger.core.models import Charter, Claim
+
+    service.store.put_repo(Repo(slug="demo/lib", package_roots=("lib",), added_at=time.time()))
+    service.store.put_charter(Charter(
+        repo="demo/lib", sha="c" * 40, name="lib", summary="Parse config files safely.",
+        claims=(
+            Claim("purpose", "Parse config files without executing them", "README.md:3"),
+            Claim("constraint", "Never import user code", "CONTRIBUTING.md:9"),
+        ),
+        version="1.0.0", toolchain="python", entry_points=("lib = lib.cli:main",),
+    ))
+
+
+def test_the_charter_is_served_with_its_sources(client: TestClient, service: Service) -> None:
+    assert client.get("/api/repos/demo/lib/charter").status_code == 404
+    _remember(service)
+    charter = client.get("/api/repos/demo/lib/charter").json()
+    assert charter["summary"] == "Parse config files safely."
+    assert {c["source"] for c in charter["claims"]} == {"README.md:3", "CONTRIBUTING.md:9"}
+    atlas = client.get("/repo/demo/lib").text
+    assert "What this repository is for" in atlas
+    assert "Never import user code" in atlas and "CONTRIBUTING.md:9" in atlas
+
+
+def test_a_major_update_stays_on_every_page_until_acknowledged(
+    client: TestClient, service: Service
+) -> None:
+    run_id = _seed(service)
+    _remember(service)
+    service.notifier.raise_(repo="demo/lib", kind="repo.update", level="notable",
+                            title="Notable update to demo/lib", body="b", sha="n" * 40)
+    notice = service.notifier.raise_(
+        repo="demo/lib", kind="repo.update", level="major",
+        title="Major update to demo/lib: its stated purpose changed", body="b", sha="d" * 40,
+    )
+    assert notice is not None
+    pages = ("/", "/repo/demo/lib", "/repo/demo/lib/prs", "/repo/demo/lib/changes",
+             f"/runs/{run_id}", f"/runs/{run_id}/report")
+    for path in pages:
+        html = client.get(path).text
+        assert "its stated purpose changed" in html, f"banner missing on {path}"
+        assert "Notable update" not in html or path.endswith("/changes"), (
+            f"a notable update should not interrupt {path}"
+        )
+
+    assert len(client.get("/api/notifications").json()) == 2
+    majors = client.get("/api/notifications?level=major").json()
+    assert [n["level"] for n in majors] == ["major"]
+    assert client.post(f"/api/notifications/{notice.id}/ack").json() == {"acknowledged": True}
+    assert client.post(f"/api/notifications/{notice.id}/ack").json() == {"acknowledged": False}
+    for path in pages:
+        assert "its stated purpose changed" not in client.get(path).text or path.endswith(
+            "/changes"
+        ), f"banner survived acknowledgement on {path}"
+    assert client.get("/api/notifications?level=bogus").status_code == 400
+    history = client.get("/repo/demo/lib/changes").text
+    assert "its stated purpose changed" in history and "acknowledged" in history, (
+        "an acknowledged update must stay in the repository's history"
+    )
+
+
+def test_the_report_says_what_it_judged_against(client: TestClient, service: Service) -> None:
+    run_id = _seed(service)
+    _remember(service)
+    service.store.set_run_charter_impact(run_id, "major")
+    service.bus.emit("run.charter_impact", run_id=run_id, repo="demo/lib", level="major",
+                     signals=[{"kind": "entry_points", "level": "major",
+                               "detail": "1 way(s) of running the project were removed",
+                               "evidence": "lib = lib.cli:main"}])
+    payload = client.get(f"/api/runs/{run_id}/report").json()
+    assert payload["charter_impact"]["level"] == "major"
+    assert payload["charter"]["summary"] == "Parse config files safely."
+    html = client.get(f"/runs/{run_id}/report").text
+    assert "ways of running the project were removed" in html or "1 way(s)" in html
+    rows = client.get("/api/repos/demo/lib/pulls").json()
+    assert rows[0]["charter_impact"] == "major"
