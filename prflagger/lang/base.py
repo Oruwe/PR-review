@@ -17,6 +17,7 @@ import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 __all__ = [
@@ -24,10 +25,12 @@ __all__ = [
     "LintCommand",
     "TestCommand",
     "Toolchain",
+    "derived_install",
     "parse_coverage",
     "parse_lint",
     "parse_tests",
     "register_coverage_parser",
+    "register_install_deriver",
     "register_lint_parser",
     "register_test_parser",
 ]
@@ -82,6 +85,9 @@ class Toolchain:
     #: Extra Dockerfile lines, inserted after the base image. Packs that need a
     #: toolchain installed (linters, reporters) put it here.
     setup_lines: tuple[str, ...] = ()
+    #: Install commands read from the repository's own files, run after `install`.
+    #: Named, like the parsers, so the pack stays serialisable; see `derived_install`.
+    install_from_repo: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         """A JSON-safe view. This is what the Atlas view renders."""
@@ -90,6 +96,7 @@ class Toolchain:
             "display": self.display,
             "base_image": self.base_image,
             "install": [list(c) for c in self.install],
+            "install_from_repo": list(self.install_from_repo),
             "test": {"argv": list(self.test.argv), "report_format": self.test.report_format},
             "lints": [{"tool": lint.tool, "argv": list(lint.argv)} for lint in self.lints],
             "coverage": list(self.coverage.argv) if self.coverage else None,
@@ -134,6 +141,31 @@ def register_coverage_parser(name: str) -> Callable[[CoverageParser], CoveragePa
         return fn
 
     return decorate
+
+
+InstallDeriver = Callable[[Path], tuple[tuple[str, ...], ...]]
+_INSTALL_DERIVERS: dict[str, InstallDeriver] = {}
+
+
+def register_install_deriver(name: str) -> Callable[[InstallDeriver], InstallDeriver]:
+    def decorate(fn: InstallDeriver) -> InstallDeriver:
+        _INSTALL_DERIVERS[name] = fn
+        return fn
+
+    return decorate
+
+
+def derived_install(toolchain: Toolchain, repo_path: Path) -> tuple[tuple[str, ...], ...]:
+    """The install commands `toolchain` reads from the repository at `repo_path`.
+
+    A deriver never raises: a file it cannot read means nothing to install.
+    """
+    commands: list[tuple[str, ...]] = []
+    for name in toolchain.install_from_repo:
+        deriver = _INSTALL_DERIVERS.get(name)
+        if deriver is not None:
+            commands.extend(deriver(repo_path))
+    return tuple(commands)
 
 
 def parse_tests(report_format: str, stdout: str) -> dict[str, str]:

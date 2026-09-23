@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import shutil
 import subprocess
 from collections.abc import Sequence
@@ -25,7 +26,7 @@ import structlog
 
 from prflagger.core.config import cache_root
 from prflagger.core.errors import ImageBuildError
-from prflagger.lang.base import Toolchain
+from prflagger.lang.base import Toolchain, derived_install
 
 __all__ = ["build_image", "dockerfile_for", "image_key_for"]
 
@@ -33,7 +34,7 @@ log = structlog.get_logger(__name__)
 
 #: Bumped when the recipe below changes. The lockfile hash describes the repo's
 #: dependencies, not our recipe, so without this a stale image would be reused.
-_RECIPE_VERSION = 3
+_RECIPE_VERSION = 4
 
 _CA_LAYER = """\
 COPY --from=prflagger_ca ca-bundle.crt /usr/local/share/ca-certificates/prflagger-proxy.crt
@@ -70,6 +71,8 @@ def image_key_for(
     digest.update(toolchain.base_image.encode("utf-8"))
     for line in toolchain.setup_lines:
         digest.update(line.encode("utf-8"))
+    for command in (*toolchain.install, *derived_install(toolchain, repo_path)):
+        digest.update(shlex.join(command).encode("utf-8"))
     for name in toolchain.lockfiles:
         candidate = repo_path / name
         digest.update(name.encode("utf-8"))
@@ -100,16 +103,20 @@ def dockerfile_for(
         lines.append(_BINARY_LAYER.rstrip())
     lines.extend(toolchain.setup_lines)
 
-    if toolchain.install:
+    install = (
+        *toolchain.install,
+        *(derived_install(toolchain, repo_path) if repo_path is not None else ()),
+    )
+    if install:
         # Dependencies are installed from a build-time copy so the layer caches;
         # the worktree under test is mounted read-only at run time instead.
         lines.append("COPY . /build")
         lines.append("WORKDIR /build")
-        for command in toolchain.install:
+        for command in install:
             # `|| true`: a repo whose install is partially broken should still get
             # a usable image and an honest INSTALL_FAILED from the test run, not a
             # build failure that reports nothing at all.
-            lines.append(f"RUN {' '.join(command)} || true")
+            lines.append(f"RUN {shlex.join(command)} || true")
 
     for key, value in toolchain.env:
         lines.append(f"ENV {key}={value}")

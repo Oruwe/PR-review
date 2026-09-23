@@ -141,6 +141,57 @@ def test_the_config_path_can_be_set_by_the_environment(
     assert loaded.server.port == 8123 and loaded.repos[0].slug == "acme/lib"
 
 
+def test_the_example_config_is_a_complete_service_config() -> None:
+    """What DEPLOY.md copies into place. It has no v1 `[target]`, which `load`
+    would fold into the repository list, and it prices models and caps spend
+    exactly as the development config does, so the two cannot drift apart."""
+    example = DEPLOY / "config.example.toml"
+    assert "[target]" not in example.read_text()
+    loaded = load(example)
+    assert [r.slug for r in loaded.repos] == [
+        "pallets/click", "python-attrs/attrs", "Textualize/rich"
+    ]
+    assert all(r.max_prs <= 25 for r in loaded.repos), "the first poll queues every PR"
+    click = loaded.repos[0]
+    assert click.package_roots == ("src/click",)
+    assert click.system_binaries == ("less", "cat", "sed")
+
+    development = load(ROOT / "config.toml")
+    assert loaded.models == development.models
+    assert loaded.budget == development.budget
+    assert loaded.brain == development.brain
+
+
+def test_only_a_tool_that_is_truly_absent_turns_a_failure_into_a_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The service runs this suite on itself in a sandbox without git or Docker.
+
+    There a test that needs git skips and says why. Anywhere git exists the same
+    failure stays a failure, so the conversion cannot hide a real one.
+    """
+    from tests.requires import missing_tool
+
+    installed = shutil.which("git") is not None
+    monkeypatch.setenv("PATH", str(tmp_path))  # nothing on PATH: git is truly absent
+    try:
+        try:
+            subprocess.run(["git", "--version"], check=False)  # noqa: S603, S607
+        except FileNotFoundError as absent:
+            raise RuntimeError("could not clone") from absent
+    except RuntimeError as wrapped:
+        assert missing_tool(wrapped) == "git", "found through the exception chain"
+        failure = wrapped
+    monkeypatch.undo()
+
+    if installed:
+        assert missing_tool(failure) is None, "git is installed here: that stays a failure"
+    try:
+        (tmp_path / "seeds.json").read_text()
+    except FileNotFoundError as data_file:
+        assert missing_tool(data_file) is None, "a missing file is not a missing tool"
+
+
 def test_memory_is_read_from_a_mounted_host_cgroup_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

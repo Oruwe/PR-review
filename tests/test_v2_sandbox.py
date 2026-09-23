@@ -210,6 +210,153 @@ def test_a_real_suite_runs_and_identical_work_deduplicates(
     assert time.monotonic() - started < 2.0, "an identical job re-ran Docker"
 
 
+def test_a_report_on_one_line_reaches_the_parser_whole() -> None:
+    """Reporters print their whole document on one line; only the display may cut it.
+
+    pytest-json-report's line for pallets/click is over half a megabyte. It was cut
+    at 20,000 characters, and past asyncio's 1 MB line limit silently dropped, so
+    every real suite parsed to no per-test results and the behavioural comparison
+    was skipped. Here the report is 3 MB, printed after more noise than the
+    transcript is allowed to keep.
+    """
+    import sys
+
+    from prflagger.lang.base import parse_tests
+    from prflagger.sandbox.stream import StreamResult, run_streaming
+
+    count = 12_000
+    script = (
+        "import json\n"
+        "for i in range(200):\n    print('noise', i)\n"
+        "tests = [{'nodeid': f'tests/test_x.py::test_case[{i}]', 'outcome': 'passed',"
+        f" 'pad': 'x' * 200}} for i in range({count})]\n"
+        "print(json.dumps({'tests': tests}))\n"
+        f"print('{count} passed')\n"
+    )
+
+    def run(max_lines: int) -> tuple[StreamResult, list[str]]:
+        shown: list[str] = []
+
+        async def scenario() -> StreamResult:
+            return await run_streaming(
+                [sys.executable, "-c", script], timeout_s=60, max_lines=max_lines,
+                on_line=lambda stream, text, offset: shown.append(text),
+            )
+
+        return asyncio.run(scenario()), shown
+
+    for max_lines, report_shown in ((150, False), (10_000, True)):
+        result, shown = run(max_lines)
+        assert result.returncode == 0
+        per_test = parse_tests("pytest-json", result.stdout)
+        assert len(per_test) == count, f"{len(per_test)} of {count} tests reached the parser"
+        assert not result.capture_full
+        assert result.truncated is not report_shown
+        assert all(len(line) < 20_100 for line in shown), "the display must still be cut"
+        assert any("more characters]" in line for line in shown) is report_shown
+
+
+@needs_docker
+def test_a_large_suite_reports_every_test(pool: SandboxPool, tmp_path: Path) -> None:
+    """The same, through a real container and the real pytest reporter."""
+    repo, base, _ = build_repo(tmp_path / "repo")
+    subprocess.run(  # noqa: S603
+        ["git", "-C", str(repo), "checkout", "-q", base], check=True, capture_output=True
+    )
+    (repo / "tests" / "test_many.py").write_text(
+        "import pytest\n\n\n"
+        "@pytest.mark.parametrize('n', range(4000))\n"
+        "def test_many(n):\n    assert n >= 0\n"
+    )
+    for argv in (["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t.invalid",
+                                  "commit", "-qm", "many"]):
+        subprocess.run(["git", "-C", str(repo), *argv], check=True)  # noqa: S603, S607
+    commit = subprocess.run(  # noqa: S603, S607
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True, capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+    spec = JobSpec(
+        run_id="rMANY", job_id="rMANY-base", stage="base_run", repo_path=repo,
+        commit=commit, toolchain=PYTHON, command=PYTHON.test.argv,
+        timeout_s=180, memory_mb=512, package_roots=("shoplib",),
+    )
+    result = asyncio.run(pool.run(spec))
+    assert result.outcome is Outcome.PASSED
+    assert len(result.per_test) == 4005, f"only {len(result.per_test)} tests were parsed"
+
+
+@needs_docker
+def test_a_suites_declared_test_dependencies_are_installed(
+    pool: SandboxPool, tmp_path: Path
+) -> None:
+    """Test-only dependencies live in a PEP 735 group, not in the project's own.
+
+    Textualize/rich declares `attrs` there; with only the project installed its
+    suite stopped at collection and nothing could be compared.
+    """
+    repo = tmp_path / "grouped"
+    (repo / "grouped").mkdir(parents=True)
+    (repo / "tests").mkdir()
+    (repo / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["setuptools"]\nbuild-backend = "setuptools.build_meta"\n\n'
+        '[project]\nname = "grouped"\nversion = "0.1.0"\n\n'
+        '[tool.setuptools]\npackages = ["grouped"]\n\n'
+        '[dependency-groups]\ntest = ["six"]\n'
+    )
+    (repo / "grouped" / "__init__.py").write_text("VALUE = 1\n")
+    (repo / "tests" / "test_grouped.py").write_text(
+        "import six\n\nfrom grouped import VALUE\n\n\n"
+        "def test_the_group_is_importable():\n    assert six.PY3 and VALUE == 1\n"
+    )
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)  # noqa: S603, S607
+    spec = JobSpec(
+        run_id="rGROUP", job_id="rGROUP-base", stage="base_run", repo_path=repo,
+        commit="0" * 40, toolchain=PYTHON, command=PYTHON.test.argv,
+        timeout_s=180, memory_mb=512, package_roots=("grouped",),
+    )
+    result = asyncio.run(pool.run(spec))
+    assert result.outcome is Outcome.PASSED, result.stdout[-2000:]
+    assert result.per_test == {"tests/test_grouped.py::test_the_group_is_importable": "passed"}
+
+
+@needs_docker
+def test_a_poetry_suites_test_group_is_installed(pool: SandboxPool, tmp_path: Path) -> None:
+    """Poetry keeps the suite's dependencies in its own table, in its own syntax.
+
+    Textualize/rich's main branch declares `attrs = "^21.4.0"` there; pip reads
+    neither the table nor the caret, so its suite stopped at collection.
+    """
+    repo = tmp_path / "versed"
+    (repo / "versed").mkdir(parents=True)
+    (repo / "tests").mkdir()
+    (repo / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["poetry-core>=1.0.0"]\n'
+        'build-backend = "poetry.core.masonry.api"\n\n'
+        '[tool.poetry]\nname = "versed"\nversion = "0.1.0"\ndescription = "fixture"\n'
+        'authors = ["Fixture <fixture@example.invalid>"]\n'
+        'packages = [{ include = "versed" }]\n\n'
+        '[tool.poetry.dependencies]\npython = "^3.9"\n\n'
+        '[tool.poetry.group.test.dependencies]\nsix = "^1.16"\n'
+    )
+    (repo / "versed" / "__init__.py").write_text("VALUE = 1\n")
+    (repo / "tests" / "test_versed.py").write_text(
+        "import six\n\nfrom versed import VALUE\n\n\n"
+        "def test_the_poetry_group_is_importable():\n    assert six.PY3 and VALUE == 1\n"
+    )
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)  # noqa: S603, S607
+    spec = JobSpec(
+        run_id="rPOETRY", job_id="rPOETRY-base", stage="base_run", repo_path=repo,
+        commit="0" * 40, toolchain=PYTHON, command=PYTHON.test.argv,
+        timeout_s=180, memory_mb=512, package_roots=("versed",),
+    )
+    result = asyncio.run(pool.run(spec))
+    assert result.outcome is Outcome.PASSED, result.stdout[-2000:]
+    assert result.per_test == {
+        "tests/test_versed.py::test_the_poetry_group_is_importable": "passed"
+    }
+
+
 @needs_docker
 def test_the_head_commit_fails_the_test_the_change_broke(
     pool: SandboxPool, tmp_path: Path

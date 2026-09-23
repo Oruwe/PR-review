@@ -10,6 +10,10 @@ behavioral changes the PR did not declare, coverage gaps, lint/type regressions,
 changes. Each fact cites evidence. Each fact that reflects a repo standard cites the PRs
 where that standard was historically enforced.
 
+The base commit is where the PR branched from (the merge-base of the base branch and the
+head), as in GitHub's own "Files changed". It is not the base branch's current tip: work
+merged there since the branch was cut is not the PR's change.
+
 Prior art: Testora (arXiv 2503.18597) does differential behavioral testing and classifies
 intent from the PR description alone, reporting F1 ≈ 0.59. Our contribution is the **Repo
 Brain**: per-repo norms mined from enforced review history, used as the oracle for what

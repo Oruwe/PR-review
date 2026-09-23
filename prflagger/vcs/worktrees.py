@@ -24,7 +24,7 @@ from prflagger.core.errors import RepoUnavailable
 from prflagger.gitsafety import assert_safe_revision
 from prflagger.vcs.credentials import run_git
 
-__all__ = ["bare_clone", "ensure_readable", "worktree_for"]
+__all__ = ["bare_clone", "ensure_readable", "merge_base", "worktree_for"]
 
 log = structlog.get_logger(__name__)
 
@@ -71,9 +71,7 @@ def worktree_for(slug: str, commit: str, *, url: str | None = None) -> Path:
         if path.is_dir():
             return path
         path.parent.mkdir(parents=True, exist_ok=True)
-        if _git(["cat-file", "-e", f"{commit}^{{commit}}"], cwd=bare).returncode != 0:
-            _git(["fetch", "origin", "--quiet", "--filter=blob:none"], cwd=bare, timeout_s=900,
-                 remote=url or f"https://github.com/{slug}")
+        _ensure_commit(bare, slug, commit, url)
         completed = _git(
             ["worktree", "add", "--detach", "--quiet", str(path), commit],
             cwd=bare,
@@ -86,6 +84,33 @@ def worktree_for(slug: str, commit: str, *, url: str | None = None) -> Path:
         ensure_readable(path)
     log.debug("worktree.created", slug=slug, commit=commit[:12])
     return path
+
+
+def merge_base(slug: str, base: str, head: str, *, url: str | None = None) -> str | None:
+    """Where `head` branched from `base`: the commit a pull request's change is
+    measured from. None when the two share no history.
+
+    GitHub reports a pull request's base as the base branch's tip, and the tip
+    moves on after the branch is cut. Measured against the tip, everything merged
+    since reads as the pull request undoing it. GitHub's own "Files changed" is
+    measured from here instead.
+    """
+    assert_safe_revision(base)
+    assert_safe_revision(head)
+    bare = bare_clone(slug, url=url)
+    for commit in (base, head):
+        with _lock_for(f"commit:{slug}:{commit}"):
+            _ensure_commit(bare, slug, commit, url)
+    completed = _git(["merge-base", base, head], cwd=bare)
+    found = completed.stdout.strip()
+    return found if completed.returncode == 0 and found else None
+
+
+def _ensure_commit(bare: Path, slug: str, commit: str, url: str | None) -> None:
+    """Fetch if `commit` is not already in the clone."""
+    if _git(["cat-file", "-e", f"{commit}^{{commit}}"], cwd=bare).returncode != 0:
+        _git(["fetch", "origin", "--quiet", "--filter=blob:none"], cwd=bare, timeout_s=900,
+             remote=url or f"https://github.com/{slug}")
 
 
 def ensure_readable(path: Path) -> None:

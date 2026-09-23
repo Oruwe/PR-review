@@ -21,6 +21,7 @@ from prflagger.probes._support import norm_for
 from prflagger.report.rank import rank
 from prflagger.report.render import _coverage, citation
 from prflagger.sandbox import runner
+from tests.requires import require_git
 
 # --------------------------------------------------------------------------------------
 # llm
@@ -295,6 +296,7 @@ def test_a_weak_match_leaves_the_declared_norm_in_place(
 
 
 def test_reseeding_is_idempotent() -> None:
+    require_git()
     repo_root = Path(__file__).resolve().parent.parent
     before = json.loads((repo_root / ".cache" / "seeds.json").read_text(encoding="utf-8"))
 

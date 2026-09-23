@@ -212,7 +212,7 @@ def _modules(
             name,
             {
                 "name": name, "loc": 0, "files": 0, "test_files": 0, "symbols": 0,
-                "commits": 0, "touched": 0, "authors": set(), "languages": defaultdict(int),
+                "commits": 0, "authors": set(), "languages": defaultdict(int),
                 "paths": [],
             },
         )
@@ -224,7 +224,6 @@ def _modules(
         measured = churn.get(fact.path)
         if measured:
             entry["commits"] += measured.commits
-            entry["touched"] += measured.touched
             entry["authors"].update(measured.authors)
 
     by_file: dict[str, int] = defaultdict(int)

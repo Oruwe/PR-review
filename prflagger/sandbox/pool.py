@@ -246,8 +246,12 @@ class SandboxPool:
             passed=sum(1 for v in per_test.values() if v == "passed"),
             failed=sum(1 for v in per_test.values() if v == "failed"),
             duration_s=round(stream.duration_s, 2), peak_rss_mb=stream.peak_rss_mb,
-            truncated=stream.truncated, exit_code=stream.returncode,
+            truncated=stream.truncated, capture_full=stream.capture_full,
+            exit_code=stream.returncode,
         )
+        if stream.capture_full:
+            log.warning("job.capture_full", job=spec.job_id,
+                        note="output past the capture limit was not parsed")
         log.info(
             "job.done", job=spec.job_id, outcome=result.outcome.value,
             tests=len(per_test), rss_mb=stream.peak_rss_mb,

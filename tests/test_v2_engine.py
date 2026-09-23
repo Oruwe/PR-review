@@ -32,7 +32,7 @@ from prflagger.sandbox.pool import SandboxPool
 from prflagger.storage.db import Database
 from prflagger.storage.events import EventBus
 from prflagger.storage.repos import Store
-from tests.v2_fixtures import REGRESSION_TEST, build_repo
+from tests.v2_fixtures import REGRESSION_TEST, advance_base, build_repo
 
 
 def _docker_ready() -> bool:
@@ -207,6 +207,9 @@ def test_the_pipeline_finds_the_undeclared_change(
     """
     monkeypatch.setenv("PRFLAGGER_CACHE_DIR", str(tmp_path / "cache"))
     repo, base, head = build_repo(tmp_path / "repo")
+    # As on any busy repository, the base branch has moved on since the pull
+    # request branched, and GitHub reports that moved-on tip as the base.
+    tip = advance_base(repo, base)
 
     async def scenario() -> tuple[Run, list[Observation], dict]:
         config = Config(
@@ -229,7 +232,7 @@ def test_the_pipeline_finds_the_undeclared_change(
             repo="demo/shoplib", number=1,
             title="fix: validate the discount percentage",
             body="Rejects a negative percent instead of silently ignoring it.",
-            author="demo", base_sha=base, head_sha=head, state="open", updated_at="now",
+            author="demo", base_sha=tip, head_sha=head, state="open", updated_at="now",
         )
         store.put_pull(pull)
         identifier = scheduler.submit(pull, force=True)
@@ -254,6 +257,13 @@ def test_the_pipeline_finds_the_undeclared_change(
     run, observations, coverage = asyncio.run(scenario())
 
     assert run.state is RunState.DONE, f"run failed: {run.error}"
+
+    # Measured from where the branch was cut, not from the moved-on tip: what
+    # landed on the base branch since is not something this pull request removed.
+    assert run.base_sha == base
+    blamed = [o for o in observations if "round" in f"{o.what_changed} {o.symbol}"]
+    assert not blamed, f"the base branch's own work was reported against the PR: {blamed}"
+    assert any("where the pull request branched" in entry for entry in coverage["verified"])
 
     behaviour = [o for o in observations if o.kind == "behavior_change"]
     assert behaviour, "the undeclared edge-case change was not found"

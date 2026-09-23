@@ -70,9 +70,9 @@ sudo /opt/prflagger/venv/bin/pip install /opt/prflagger/src
 # Configuration and secrets
 sudo install -d -m 750 -o root -g prflagger /etc/prflagger
 sudo install -m 640 -o root -g prflagger /opt/prflagger/src/deploy/.env.example /etc/prflagger/env
-sudo install -m 640 -o root -g prflagger /opt/prflagger/src/config.toml /etc/prflagger/config.toml
+sudo install -m 640 -o root -g prflagger /opt/prflagger/src/deploy/config.example.toml /etc/prflagger/config.toml
 sudoedit /etc/prflagger/env           # fill in the tokens
-sudoedit /etc/prflagger/config.toml   # list your repositories under [[repos]]
+sudoedit /etc/prflagger/config.toml   # the repositories to watch (see "Choosing repositories")
 
 # Run it, and keep it running
 sudo cp /opt/prflagger/src/deploy/prflagger.service /etc/systemd/system/
@@ -102,8 +102,8 @@ sudoedit .env    # the tokens, and DOCKER_GID=$(getent group docker | cut -d: -f
 
 # The data directory, owned by the container's user, holding config.toml
 sudo install -d -o 10001 -g 10001 /var/lib/prflagger
-sudo install -o 10001 -g 10001 ../config.toml /var/lib/prflagger/config.toml
-sudoedit /var/lib/prflagger/config.toml   # your repositories
+sudo install -o 10001 -g 10001 config.example.toml /var/lib/prflagger/config.toml
+sudoedit /var/lib/prflagger/config.toml   # the repositories to watch
 
 sudo docker compose up -d --build
 curl -s localhost:8000/api/health
@@ -151,6 +151,68 @@ Then add repositories in the interface (or in `config.toml`). For each one the s
 clones it, reads what it is for, learns its reviewers' standards from merged pull
 requests, and starts running every open pull request. The first reading of a large
 repository takes a few minutes.
+
+### Choosing repositories to watch
+
+You do not need a busy repository of your own. Watching is read-only: the service reads
+a repository's open pull requests and runs them in its own sandbox. It never comments,
+pushes or opens anything on GitHub, so you can watch any public repository and nobody
+there will see it.
+
+It is most useful where three things hold:
+
+- **Python.** Python gets the full depth: the public-API diff, the call graph, and a
+  charter read from `pyproject.toml` and the README. JavaScript, TypeScript and Go get
+  less.
+- **A test suite that runs offline in minutes.** Sandboxes have no network, and every
+  pull request runs the suite twice, at the commit it branched from and at its head.
+  Test-only dependencies are installed from `test`/`tests`/`dev` extras, PEP 735
+  dependency groups, Poetry's test or dev group, or requirements files.
+- **Pull requests that maintainers review closely.** Mined standards come from review
+  comments that were acted on before a merge.
+
+`deploy/config.example.toml` starts with three that meet them. Each was run end to end
+on a real open pull request before being recommended:
+
+| | Suite in the sandbox (base / head) | Peak memory | Result |
+|---|---|---|---|
+| `pallets/click` #3859 | 2,084 tests, 8 s each | 131 MB | no findings: the pull request only adds type-checker configuration |
+| `python-attrs/attrs` #1626 | 1,412 / 1,414 tests, 28 s each | 260 MB | two new mypy errors at head |
+| `Textualize/rich` #4184 | 981 tests, 12 s each | 73 MB | new ruff and mypy diagnostics: the pull request moves rich from Poetry to uv and changes its lint configuration |
+
+Some tests fail at every commit, for reasons outside the pull request. They fail the same
+way on both sides, so they produce no findings:
+
+- four of attrs' packaging tests, because the sandbox imports attrs from the checkout
+  rather than from an installed distribution;
+- eight of rich's syntax-highlighting tests, because the sandbox installs a newer
+  Pygments, which colours code differently.
+
+A run's first image build adds about a minute.
+
+**Add a repository where you know the answer.** Fork `pallets/click`, open small pull
+requests inside your fork, and uncomment the fork's entry in the config. Good ones to try:
+
+- an edge case changed without saying so;
+- a new public function;
+- a README-only change.
+
+Then check that the service flags exactly what you did, and nothing else.
+
+**Keep `max_prs` small at first.** The first poll queues every open pull request it
+finds, up to `max_prs`, and each run takes a minute or two. Raise it once you know the
+time and cost.
+
+**Set `GITHUB_TOKEN`.** Without one, GitHub allows 60 API requests an hour for
+everything the service does: polling, and learning from past reviews. A fine-grained
+token with read-only access to public repositories is enough.
+
+**After a week, look at:**
+
+- which findings were useful and which were noise, for each kind: behaviour, API, lint,
+  coverage;
+- how long runs take, on each run's page;
+- what each pull request cost, from `GET /api/budget`.
 
 ## 6. Backups
 

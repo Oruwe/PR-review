@@ -431,6 +431,49 @@ def test_a_failing_webhook_is_recorded_not_raised(tmp_path: Path) -> None:
 
 
 # ----------------------------------------------------------------------------------
+# Reading history from the clone the service actually keeps
+# ----------------------------------------------------------------------------------
+
+
+def test_history_is_read_without_downloading_old_file_contents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The service keeps blob-less clones; churn must come from trees alone.
+
+    Counting lines per commit needs every old version of every file, which a
+    partial clone fetches one commit at a time. On pallets/click (495 commits a
+    year) that took the atlas 131 s against a 180 s limit; a busier repository
+    exceeded it and its charter was never built.
+    """
+    from prflagger.atlas.cartography import churn_by_path
+    from prflagger.vcs.worktrees import worktree_for
+
+    monkeypatch.setenv("PRFLAGGER_CACHE_DIR", str(tmp_path / "cache"))
+    origin = _invoicer(tmp_path / "origin")
+    _git(origin, "config", "uploadpack.allowFilter", "true")
+    for author, text in (("Ada", "one"), ("Grace", "two"), ("Ada", "three")):
+        (origin / "invoicer" / "render.py").write_text(f"STAGE = {text!r}\n")
+        _git(origin, "add", "-A")
+        _git(origin, "-c", f"user.name={author}", "commit", "-q", "-m", text)
+    head = _git(origin, "rev-parse", "HEAD")
+
+    tree = worktree_for("acme/invoicer", head, url=f"file://{origin}")
+    bare = tmp_path / "cache" / "repos" / "acme__invoicer.git"
+    assert _git(bare, "config", "remote.origin.promisor") == "true", (
+        "the clone is not partial, so this test would prove nothing"
+    )
+
+    # Nothing may be fetched from here on: an old blob would have to come from the
+    # remote, and on GitHub that is one round trip per commit.
+    origin.rename(tmp_path / "unreachable")
+
+    churn = churn_by_path(tree)
+    assert churn, "churn needed file contents the partial clone does not hold"
+    assert churn["invoicer/render.py"].commits == 4  # the base commit and three more
+    assert churn["invoicer/render.py"].authors == {"T", "Ada", "Grace"}
+
+
+# ----------------------------------------------------------------------------------
 # Upgrading an existing installation
 # ----------------------------------------------------------------------------------
 

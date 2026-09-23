@@ -1,0 +1,92 @@
+# A starting configuration for a deployed service: three public repositories to watch
+# while you try it out. Copy it to where PRFLAGGER_CONFIG points (DEPLOY.md, step 3)
+# and change the [[repos]] list to your own. DEPLOY.md, "Choosing repositories to
+# watch", explains why these, and how to add a practice fork.
+#
+# Watching is read-only. The service polls open pull requests, runs them in its own
+# sandbox and shows the results to you; it never comments, pushes or opens anything
+# on GitHub, so a project you watch does not see it.
+#
+# No credential belongs in this file. Tokens and keys come from the environment only
+# (deploy/.env.example lists them).
+
+# Each repository below was run end to end before this file was written: a real open
+# pull request each, base and head suites in the offline sandbox. DEPLOY.md has the
+# numbers.
+
+# The reference target. Its maintainers review closely, which gives the mined review
+# standards real material.
+[[repos]]
+slug = "pallets/click"
+package_roots = ["src/click"]
+# Real binaries the suite shells out to, staged into the sandbox image.
+system_binaries = ["less", "cat", "sed"]
+# How many open pull requests to track. The first poll queues every one it finds and
+# each run takes a minute or two, so start small and raise it once you know the cost.
+max_prs = 10
+
+# More pull request traffic: exercises the queue, the ranking and the spend.
+[[repos]]
+slug = "python-attrs/attrs"
+package_roots = ["src/attr", "src/attrs"]
+max_prs = 5
+
+# A busy, popular library whose test dependencies are declared through Poetry.
+[[repos]]
+slug = "Textualize/rich"
+max_prs = 5
+
+# Your own fork of pallets/click: the one place you know what each pull request should
+# be flagged for. Fork it on GitHub, open small pull requests inside the fork (an
+# undeclared edge-case change, a new public function, a README-only change), then
+# uncomment this and check the service flags exactly those.
+# [[repos]]
+# slug = "<your-account>/click"
+# package_roots = ["src/click"]
+# system_binaries = ["less", "cat", "sed"]
+# max_prs = 25
+
+[server]
+host = "127.0.0.1"           # the systemd unit and the container both pass --host
+port = 8000
+poll_interval_s = 120        # conditional requests make this nearly free
+debounce_s = 30              # collapse a force-push storm into one run
+event_retention_days = 7
+max_queue_depth = 200
+
+[sandbox]
+max_concurrent = 0           # 0 -> min(2, cpu_count // 2)
+default_timeout_s = 300
+default_memory_mb = 1024
+
+# Hard caps on model spend. A call that would breach one is refused, and the run says
+# so. The daily worst case is the number of repositories x per_repo_daily_usd.
+[budget]
+total_usd = 100.0
+per_run_usd = 0.25
+per_repo_daily_usd = 2.00
+
+# Verify the model with `prflagger llm check` before relying on it. Until it works,
+# runs still happen and say that adjudication was skipped, and why.
+[models]
+enabled = "auto"                       # "auto": use a model when credentials exist; "off": never
+light = "anthropic.claude-haiku-4-5"   # naming mined review standards
+heavy = "anthropic.claude-sonnet-5"    # adjudication and suggestions
+region = "us-east-1"
+cache_ttl = "1h"
+max_adjudications = 8
+
+# USD per million tokens, [input, output]. A model with no price is refused. Check
+# current Bedrock pricing.
+[models.prices]
+"anthropic.claude-haiku-4-5" = [1.0, 5.0]
+"anthropic.claude-sonnet-5" = [3.0, 15.0]
+
+# Learning each repository's review standards from its merged pull requests. Without
+# GITHUB_TOKEN, GitHub allows 60 requests an hour, enough for about 15 pull requests.
+[brain]
+harvest_limit = 200
+incremental_limit = 100
+refresh_hours = 24
+min_support = 3
+min_reviewers = 2

@@ -52,7 +52,7 @@ from prflagger.probes.surface import lint_observations, public_index, surface_ob
 from prflagger.sandbox.pool import JobSpec, SandboxPool
 from prflagger.storage.events import EventBus
 from prflagger.storage.repos import Store
-from prflagger.vcs.worktrees import worktree_for
+from prflagger.vcs.worktrees import merge_base, worktree_for
 
 __all__ = ["RunWorker"]
 
@@ -143,6 +143,7 @@ class RunWorker:
         # -- prepare: get both commits on disk --------------------------------
         run = self._advance(run, RunState.PREPARING)
         url = entry.clone_url or None
+        run = await self._from_fork_point(run, coverage, url)
         base_tree = await _thread(worktree_for, run.repo, run.base_sha, url=url)
         head_tree = await _thread(worktree_for, run.repo, run.head_sha, url=url)
         toolchain = await _thread(
@@ -202,6 +203,38 @@ class RunWorker:
         return run
 
     # -- stages ---------------------------------------------------------------
+
+    async def _from_fork_point(
+        self, run: Run, coverage: _Verification, url: str | None
+    ) -> Run:
+        """Measure the pull request from where it branched, not from the base tip.
+
+        The base GitHub reports is the base branch's tip, which keeps moving after
+        a branch is cut. Compared with the tip, whatever was merged since reads as
+        the pull request undoing it: on pallets/click#3859, 44 tests the branch had
+        never seen were reported as removed by it. Every later stage — both suites,
+        the API diff, the charter, citations — uses the base stored here.
+        """
+        tip = run.base_sha
+        fork_point = await _thread(merge_base, run.repo, tip, run.head_sha, url=url)
+        if fork_point is None:
+            coverage.skip(
+                "measuring from where the pull request branched",
+                f"{tip[:10]} and {run.head_sha[:10]} share no history; "
+                "compared with the base branch's tip instead",
+            )
+            return run
+        if fork_point == tip:
+            return run
+        self._store.set_run_base(run.id, fork_point)
+        self._bus.emit(
+            "run.base", run_id=run.id, repo=run.repo, branch_tip=tip, fork_point=fork_point,
+        )
+        coverage.ok(
+            f"measured from where the pull request branched ({fork_point[:10]}), "
+            f"not the base branch's tip ({tip[:10]})"
+        )
+        return replace(run, base_sha=fork_point)
 
     async def _suite(
         self, run: Run, stage: str, tree: Path, commit: str, toolchain: Toolchain, entry: Any

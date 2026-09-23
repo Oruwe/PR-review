@@ -124,3 +124,95 @@ def test_read_only_mount_is_respected_by_every_tool() -> None:
     assert "--cache-dir=/tmp/" in lints["mypy"]
     assert python.coverage is not None
     assert "COVERAGE_FILE=/tmp/" in " ".join(python.coverage.argv)
+
+
+# ----------------------------------------------------------------------------------
+# Poetry's development dependencies
+# ----------------------------------------------------------------------------------
+
+
+def test_poetry_constraints_mean_what_poetry_documents() -> None:
+    """Each translation is checked by what it admits, not by its spelling."""
+    from packaging.specifiers import SpecifierSet
+
+    from prflagger.lang.poetry import specifier
+
+    cases = {
+        "^1.2.3": (["1.2.3", "1.9.0"], ["1.2.2", "2.0.0"]),
+        "^0.2.3": (["0.2.3", "0.2.9"], ["0.3.0"]),
+        "^0.0.3": (["0.0.3"], ["0.0.4"]),
+        "^0": (["0.9"], ["1.0"]),
+        "~1.2.3": (["1.2.9"], ["1.3.0"]),
+        "~1.2": (["1.2.0", "1.2.7"], ["1.3.0"]),
+        "~1": (["1.9"], ["2.0"]),
+        "1.2.*": (["1.2.5"], ["1.3.0"]),
+        "1.2.3": (["1.2.3"], ["1.2.4"]),
+        ">= 1.2, < 1.5": (["1.4"], ["1.5", "1.1"]),
+        "=2.0": (["2.0"], ["2.1"]),
+        "~=1.4": (["1.9"], ["2.0"]),
+    }
+    for constraint, (admitted, refused) in cases.items():
+        spec = SpecifierSet(specifier(constraint))
+        for version in admitted:
+            assert version in spec, f"{constraint!r} -> {spec} must admit {version}"
+        for version in refused:
+            assert version not in spec, f"{constraint!r} -> {spec} must refuse {version}"
+    assert specifier("*") == specifier("") == ""
+    assert specifier("^1.0 || ^2.0") == "", "an either-or has no PEP 440 form"
+
+
+def test_the_suites_poetry_group_becomes_installable_requirements() -> None:
+    from packaging.requirements import Requirement
+
+    from prflagger.lang.poetry import dev_requirements
+
+    pyproject = {"tool": {"poetry": {
+        "dependencies": {"python": "^3.8", "rich": "^13"},
+        "group": {
+            "test": {"dependencies": {
+                "pytest": "^7.0.0",
+                "hypothesis": {"version": "^6.0", "extras": ["cli"]},
+                "tomli": {"version": "^2", "python": "<3.11"},
+                "uvloop": {"version": "*", "markers": "sys_platform == 'linux'"},
+                "numpy": [{"version": "^1.24", "python": "<3.12"},
+                          {"version": "^2", "python": ">=3.12"}],
+                "local": {"path": "../local"},
+            }},
+            "docs": {"dependencies": {"sphinx": "*"}},
+        },
+    }}}
+    requirements = dev_requirements(pyproject)
+    parsed = {str(Requirement(r)) for r in requirements}  # every one is valid PEP 508
+    assert len(parsed) == 6, "the path dependency is left out, not guessed at"
+    names = sorted(Requirement(r).name for r in requirements)
+    assert names == ["hypothesis", "numpy", "numpy", "pytest", "tomli", "uvloop"]
+    by_name = {Requirement(r).name: Requirement(r) for r in requirements}
+    assert by_name["hypothesis"].extras == {"cli"}
+    tomli = by_name["tomli"].marker
+    assert tomli is not None
+    assert tomli.evaluate({"python_full_version": "3.10.4"})
+    assert not tomli.evaluate({"python_full_version": "3.11.9"})
+    assert "rich" not in names and "sphinx" not in names, "only the suite's own group"
+
+
+def test_without_a_test_group_the_development_group_is_used() -> None:
+    from prflagger.lang.poetry import dev_requirements
+
+    legacy = {"tool": {"poetry": {"dev-dependencies": {"attrs": "^21.4.0"}}}}
+    assert dev_requirements(legacy) == ("attrs>=21.4.0,<22",)
+    assert dev_requirements({"project": {"name": "x"}}) == ()
+
+
+def test_a_poetry_repositorys_recipe_installs_its_test_group(tmp_path: Path) -> None:
+    python = pack("python")
+    assert python is not None
+    (tmp_path / "pyproject.toml").write_text("[project]\nname = 'x'\n")
+    plain = dockerfile_for(python, repo_path=tmp_path)
+    assert "six" not in plain
+
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.poetry]\nname = 'x'\n\n[tool.poetry.group.test.dependencies]\nsix = '^1.16'\n"
+    )
+    recipe = dockerfile_for(python, repo_path=tmp_path)
+    assert "six>=1.16,<2" in recipe
+    assert recipe.index("six>=1.16") > recipe.index("/build"), "after the project itself"
