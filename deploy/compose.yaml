@@ -1,0 +1,34 @@
+# PR Flagger with Docker Compose. From this directory:
+#     cp .env.example .env   # then fill it in; it is gitignored
+#     docker compose up -d --build
+# See DEPLOY.md for the full procedure, including TLS in front of it.
+name: prflagger
+
+services:
+  prflagger:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    image: prflagger:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PRFLAGGER_CACHE_DIR: ${PRFLAGGER_DATA:-/var/lib/prflagger}
+      PRFLAGGER_CONFIG: ${PRFLAGGER_DATA:-/var/lib/prflagger}/config.toml
+      PRFLAGGER_CGROUP_ROOT: /host/sys/fs/cgroup
+    # The host's docker group, so the non-root service may use the socket.
+    group_add:
+      - "${DOCKER_GID:-999}"
+    volumes:
+      # The SAME path on both sides. Sandbox containers are started on the host's
+      # Docker, which resolves bind-mount paths on the host: a worktree the service
+      # sees at /var/lib/prflagger/... must exist at exactly that host path.
+      - ${PRFLAGGER_DATA:-/var/lib/prflagger}:${PRFLAGGER_DATA:-/var/lib/prflagger}
+      - /var/run/docker.sock:/var/run/docker.sock
+      # The host's cgroup tree, read-only, so each sandbox's memory and CPU can be
+      # measured. A container's own /sys/fs/cgroup shows only itself.
+      - /sys/fs/cgroup:/host/sys/fs/cgroup:ro
+    # Loopback only: put a TLS proxy (deploy/Caddyfile) in front of it.
+    ports:
+      - "127.0.0.1:${PRFLAGGER_PORT:-8000}:8000"
+    working_dir: ${PRFLAGGER_DATA:-/var/lib/prflagger}

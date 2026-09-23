@@ -13,6 +13,31 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 TOY_FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
 
+_AWS_CREDENTIAL_VARS = (
+    "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_PROFILE",
+    "AWS_BEARER_TOKEN_BEDROCK", "ANTHROPIC_AWS_API_KEY", "ANTHROPIC_BEDROCK_MANTLE_BASE_URL",
+)
+
+
+@pytest.fixture(autouse=True)
+def _no_ambient_model_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """No test reaches a real model because of whatever the machine happens to hold.
+
+    The service uses a model whenever AWS credentials are present. A test that
+    wants one supplies it explicitly — a provider at the network boundary, or a
+    base URL pointing at a local server — so a developer's own credentials can
+    neither be spent by the suite nor change what it checks.
+    """
+    for name in _AWS_CREDENTIAL_VARS:
+        monkeypatch.delenv(name, raising=False)
+    nowhere = tmp_path_factory.getbasetemp() / "no-aws"
+    monkeypatch.setenv("AWS_CONFIG_FILE", str(nowhere / "config"))
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", str(nowhere / "credentials"))
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
 @pytest.fixture(scope="session")
 def target() -> dict[str, str]:
     data = tomllib.loads((REPO_ROOT / "config.toml").read_text(encoding="utf-8"))

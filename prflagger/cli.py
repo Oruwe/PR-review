@@ -1,8 +1,14 @@
 """Command line entry points.
 
+    prflagger serve [--host H] [--port P] [--no-watch]
+    prflagger watch --repo <slug>
     prflagger brain build --repo <slug>
     prflagger check --repo <path> --base <sha> --head <sha> --out report.html
     prflagger norms --repo <slug>
+    prflagger gc [--days N]
+    prflagger llm check [--model ID]
+    prflagger backup [--out FILE]
+    prflagger restore FILE [--with-config]
 
 This module is the only place that prints.
 """
@@ -12,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -84,6 +91,38 @@ def main(argv: list[str] | None = None) -> int:
     ui.add_argument("--data", type=Path, default=Path(".cache/ui/findings.json"))
     ui.add_argument("--out", type=Path, default=Path("index.html"))
 
+    serve = sub.add_parser("serve", help="run the service and its web interface")
+    serve.add_argument("--host", default="")
+    serve.add_argument("--port", type=int, default=0)
+    serve.add_argument(
+        "--no-watch", action="store_true", help="do not poll GitHub; run only on request"
+    )
+    serve.add_argument("--reload", action="store_true", help="reload on code changes")
+
+    watch = sub.add_parser("watch", help="start watching a repository")
+    watch.add_argument("--repo", required=True, help="owner/name")
+
+    collect = sub.add_parser("gc", help="reclaim worktrees, images, transcripts and events")
+    collect.add_argument("--days", type=int, default=0, help="keep this many days")
+    collect.add_argument(
+        "--dry-run", action="store_true", help="report what would go, remove nothing"
+    )
+
+    llm = sub.add_parser("llm", help="the model provider")
+    llm_sub = llm.add_subparsers(dest="llm_command", required=True)
+    llm_check = llm_sub.add_parser(
+        "check", help="make one tiny real call to prove credentials, region and model work"
+    )
+    llm_check.add_argument("--model", default="", help="model id (default: [models] light)")
+
+    saving = sub.add_parser("backup", help="snapshot the database (safe while serving)")
+    saving.add_argument("--out", type=Path, default=None,
+                        help="archive to write (default: prflagger-backup-<time>.tar.gz)")
+    restoring = sub.add_parser("restore", help="put a backup back; the service must be stopped")
+    restoring.add_argument("archive", type=Path)
+    restoring.add_argument("--with-config", action="store_true",
+                           help="also restore config.toml from the backup")
+
     args = parser.parse_args(argv)
     _configure_logging()
 
@@ -93,7 +132,246 @@ def main(argv: list[str] | None = None) -> int:
         return _check(args.repo, args.base, args.head, args.out, args.json_out, args.ui)
     if args.command == "ui":
         return _ui(args.data, args.out)
+    if args.command == "serve":
+        return _serve(args.host, args.port, watch=not args.no_watch, reload=args.reload)
+    if args.command == "watch":
+        return _watch(args.repo)
+    if args.command == "gc":
+        return _gc(args.days, dry_run=args.dry_run)
+    if args.command == "llm":
+        return _llm_check(args.model)
+    if args.command == "backup":
+        return _backup(args.out)
+    if args.command == "restore":
+        return _restore(args.archive, with_config=args.with_config)
     return _norms(args.repo)
+
+
+# ----------------------------------------------------------------------------------
+# serve / watch / gc
+# ----------------------------------------------------------------------------------
+
+
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+def _serve(host: str, port: int, *, watch: bool, reload: bool) -> int:
+    """Run the always-on service. This is the main entry point for v2."""
+    import uvicorn
+
+    from prflagger.api.app import create_app
+    from prflagger.api.auth import ADMIN_ENV, Tokens
+    from prflagger.api.service import Service
+    from prflagger.core.config import load
+
+    config = load()
+    bind_host = host or config.server.host
+    bind_port = port or config.server.port
+
+    try:
+        tokens = Tokens.from_env()
+    except ValueError as error:
+        print(f"refusing to start: {error}", file=sys.stderr)
+        return 2
+    if not tokens.enabled and bind_host not in _LOOPBACK:
+        # Anyone who can reach an open service can add repositories, start runs in
+        # its sandbox and spend its model budget. Loopback is the only safe place
+        # for that; anything else needs a token.
+        print(
+            f"refusing to listen on {bind_host} without a sign-in token.\n"
+            f"  set {ADMIN_ENV} (e.g. `openssl rand -hex 32`), or listen on 127.0.0.1 "
+            "behind an SSH tunnel or VPN.",
+            file=sys.stderr,
+        )
+        return 2
+
+    service = Service.build(config)
+    for entry in config.repos:
+        if service.store.repo(entry.slug) is None:
+            from prflagger.core.models import Repo
+
+            service.store.put_repo(
+                Repo(
+                    slug=entry.slug,
+                    default_branch=entry.default_branch,
+                    package_roots=tuple(entry.package_roots),
+                    added_at=time.time(),
+                )
+            )
+
+    print(f"PR Flagger on http://{bind_host}:{bind_port}")
+    print(f"  watching {len(config.repos)} configured repo(s); "
+          f"{service.pool.capacity} sandbox slot(s)")
+    if not service.github.authenticated:
+        print("  note: no GitHub token found — public repos only, 60 calls/hour")
+    if not watch:
+        print("  polling disabled; runs start only when you ask for them")
+    if tokens.enabled:
+        print("  sign-in: admin" + (" and viewer tokens" if tokens.viewer else " token"))
+    else:
+        print("  sign-in: none (listening on loopback only)")
+
+    app = create_app(service, config=config, watch=watch, tokens=tokens)
+    marker = _mark_running(service.db.path)
+    try:
+        uvicorn.run(app, host=bind_host, port=bind_port, log_level="warning")
+    finally:
+        marker.unlink(missing_ok=True)
+    return 0
+
+
+def _mark_running(db_path: Path) -> Path:
+    """Record this process as the one using `db_path`, so a restore can refuse."""
+    import socket
+
+    from prflagger.storage.backup import pid_file
+
+    marker = pid_file(db_path)
+    marker.write_text(
+        json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "since": time.time()}),
+        encoding="utf-8",
+    )
+    return marker
+
+
+def _watch(slug: str) -> int:
+    """Record a repository so the service starts polling it."""
+    from prflagger.api.service import Service
+    from prflagger.core.models import Repo
+
+    service = Service.build()
+    entry = service.config.repo(slug)
+    try:
+        branch = (
+            entry.default_branch if entry.clone_url else service.github.default_branch(slug)
+        )
+    except Exception as error:  # noqa: BLE001 - report, do not traceback
+        print(f"could not reach {slug}: {_reason(error)}", file=sys.stderr)
+        return 1
+    service.store.put_repo(
+        Repo(
+            slug=slug, default_branch=branch,
+            package_roots=tuple(entry.package_roots), added_at=time.time(),
+        )
+    )
+    print(f"watching {slug} (default branch {branch})")
+    return 0
+
+
+def _config_path() -> Path:
+    from prflagger.core.config import CONFIG_ENV
+
+    return Path(os.environ.get(CONFIG_ENV) or "config.toml")
+
+
+def _backup(out: Path | None) -> int:
+    from prflagger.storage.backup import backup
+    from prflagger.storage.db import default_path
+
+    target = out or Path(time.strftime("prflagger-backup-%Y%m%d-%H%M%S.tar.gz"))
+    try:
+        manifest = backup(default_path(), target, config=_config_path())
+    except FileNotFoundError as error:
+        print(f"nothing to back up: {error}", file=sys.stderr)
+        return 1
+    rows = manifest["rows"]
+    print(f"backup      : {target}")
+    print(f"runs        : {rows.get('runs', 0)}   charters: {rows.get('charters', 0)}"
+          f"   norms: {rows.get('norms', 0)}"
+          f"   review comments: {rows.get('review_comments', 0)}")
+    included = manifest["includes_config"]
+    print(f"config      : {'included' if included else 'not found, not included'}")
+    print("not included: " + ", ".join(manifest["not_included"]) + " (rebuilt on demand)")
+    return 0
+
+
+def _restore(archive: Path, *, with_config: bool) -> int:
+    from prflagger.storage.backup import ServiceRunning, restore
+    from prflagger.storage.db import default_path
+
+    try:
+        manifest = restore(archive, default_path(),
+                           config=_config_path() if with_config else None)
+    except ServiceRunning as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as error:
+        print(f"could not restore: {error}", file=sys.stderr)
+        return 1
+    print(f"restored    : {archive} (taken {manifest['created_at']})")
+    if manifest.get("previous_database"):
+        print(f"kept        : the database it replaced, at {manifest['previous_database']}")
+    print("next        : start the service; it migrates the schema if needed")
+    return 0
+
+
+def _llm_check(model: str) -> int:
+    """One real call, uncached, through the same client and ledger the service uses."""
+    from prflagger.core.config import load
+    from prflagger.llm.client import build_client
+    from prflagger.llm.ledger import BudgetExceeded
+    from prflagger.llm.provider import Request
+    from prflagger.storage.db import connect
+
+    config = load()
+    client = build_client(config, connect())
+    chosen = model or config.models.light
+    spent = client.ledger.spent()
+    print(f"credentials : {client.credentials or 'none'}")
+    print(f"region      : {config.models.region}")
+    print(f"models      : light={config.models.light}  heavy={config.models.heavy}")
+    print(f"budget      : ${spent:.4f} spent of ${config.budget.total_usd:.2f}"
+          f" (per run ${config.budget.per_run_usd:.2f},"
+          f" per repo per day ${config.budget.per_repo_daily_usd:.2f})")
+    if not client.available:
+        print(f"unavailable : {client.unavailable_reason}")
+        return 1
+    started = time.monotonic()
+    try:
+        answer = client.ask(
+            Request(model=chosen, prompt="Reply with the single word: ready", max_tokens=8),
+            stage="check", use_cache=False,
+        )
+    except BudgetExceeded as error:
+        print(f"refused     : {error}")
+        return 1
+    except Exception as error:  # noqa: BLE001 - the point is to show what went wrong
+        print(f"failed      : {type(error).__name__}: {str(error)[:300]}")
+        if client.unavailable_reason:
+            print(f"now         : {client.unavailable_reason}")
+        return 1
+    usage = answer.completion
+    print(f"reply       : {answer.text.strip()!r} from {chosen}"
+          f" in {time.monotonic() - started:.1f}s")
+    print(f"usage       : {usage.input_tokens} in, {usage.output_tokens} out"
+          f" — ${answer.usd:.6f}, recorded in the ledger")
+    print("ready       : adjudication and norm naming will use this provider")
+    return 0
+
+
+def _gc(days: int, *, dry_run: bool = False) -> int:
+    """Reclaim disk. Worktrees, images, transcripts and cached job results."""
+    from prflagger.api.service import Service
+    from prflagger.engine.janitor import disk_free_ratio, sweep
+
+    service = Service.build()
+    before = disk_free_ratio()
+    reclaimed = sweep(
+        service.store, service.config, service.bus,
+        keep_days=days or None, dry_run=dry_run,
+    )
+    if not dry_run:
+        service.db.execute("VACUUM")
+
+    print(f"worktrees removed   : {reclaimed.worktrees}")
+    print(f"images removed      : {reclaimed.images}")
+    print(f"transcripts removed : {reclaimed.transcripts}")
+    print(f"events pruned       : {reclaimed.events}")
+    print(f"reclaimed           : {reclaimed.bytes_freed / (1024 * 1024):.1f} MB")
+    print(f"disk free           : {before * 100:.1f}% -> {disk_free_ratio() * 100:.1f}%")
+    for failure in reclaimed.failures:
+        print(f"  could not remove: {failure}", file=sys.stderr)
+    return 0
 
 
 # ----------------------------------------------------------------------------------

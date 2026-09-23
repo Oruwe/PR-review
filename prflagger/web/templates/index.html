@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Repositories — PR Flagger{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Repositories</h1>
+    <p class="subtle">Every pull request is run in a sandbox, then compared against the
+      repository&rsquo;s own code.</p>
+  </div>
+  <span class="spacer"></span>
+  {% if can_write(request) %}
+  <form class="toolbar" id="add-repo" style="margin:0">
+    <input type="text" name="slug" placeholder="owner/name" aria-label="Repository to watch"
+           size="22" required>
+    <button class="primary" type="submit">Watch</button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="stats" style="margin-bottom:20px">
+  <div class="stat">
+    <div class="value">{{ repos|length }}</div>
+    <div class="label">Watched</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ health.queue_depth }}<span class="muted"
+      style="font-size:.9rem">/{{ health.queue_cap }}</span></div>
+    <div class="label">Queued</div>
+    <div class="sub">
+      {{ health.active_runs|length }} running now{% if health.queue_rejected %} ·
+      <span style="color:var(--critical)">{{ health.queue_rejected }} refused</span>{% endif %}
+    </div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ health.sandbox_capacity }}</div>
+    <div class="label">Sandbox slots</div>
+    <div class="sub">concurrent containers</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ "%.0f"|format(health.disk_free_ratio * 100) }}%</div>
+    <div class="label">Disk free</div>
+    <div class="sub">
+      {% if health.disk_free_ratio < 0.1 %}
+        <span style="color:var(--critical)">run <code>prflagger gc</code></span>
+      {% else %}headroom for runs{% endif %}
+    </div>
+  </div>
+  <div class="stat">
+    <div class="value">{% if health.github_authenticated %}yes{% else %}no{% endif %}</div>
+    <div class="label">GitHub token</div>
+    <div class="sub">
+      {% if health.github_rate_remaining is not none %}
+        {{ health.github_rate_remaining }} calls left
+      {% else %}not polled yet{% endif %}
+    </div>
+  </div>
+</div>
+
+{% if repos %}
+<div class="card">
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>Repository</th>
+        <th class="num">Open PRs</th>
+        <th class="num">Runs</th>
+        <th class="num">Flagged</th>
+        <th>Map</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for row in repos %}
+      <tr>
+        <td>
+          <a href="/repo/{{ row.repo.slug }}"><strong>{{ row.repo.slug }}</strong></a>
+          <div class="muted" style="font-size:.78rem">
+            {{ row.repo.default_branch }}{% if row.repo.package_roots %} ·
+            {{ row.repo.package_roots|join(', ') }}{% endif %}
+          </div>
+        </td>
+        <td class="num">{{ row.open_pulls }}</td>
+        <td class="num">{{ row.runs }}</td>
+        <td class="num">{{ row.flagged }}</td>
+        <td>
+          {% if row.has_atlas %}
+            <span class="chip good"><span class="dot"></span>built</span>
+          {% else %}
+            <span class="chip neutral"><span class="dot"></span>not built</span>
+          {% endif %}
+        </td>
+        <td class="num">
+          <a class="button" href="/repo/{{ row.repo.slug }}/prs">Pull requests</a>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% else %}
+<div class="card empty">
+  <h3>No repositories yet</h3>
+  <p class="subtle">Add one above. Any repository works &mdash; the toolchain is detected
+     from the files in it, and a repository nothing recognises is run with the commands
+     its own CI declares.</p>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+<script type="module">
+import { post } from "/static/js/api.js";
+document.getElementById("add-repo")?.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  button.disabled = true; button.textContent = "Adding…";
+  try {
+    await post("/api/repos", { slug: form.slug.value.trim() });
+    location.reload();
+  } catch (error) {
+    button.disabled = false; button.textContent = "Watch";
+    alert(error.message);
+  }
+});
+</script>
+{% endblock %}

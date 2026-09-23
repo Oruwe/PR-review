@@ -1,8 +1,75 @@
-[target]
-slug = "pallets/click"
-fork = "Oruwe/click"          # seeded branches for C4 live here — fork must exist before C4
-package_root = "src/click"
+# Watched repositories. Add as many as you like; the service polls each one and
+# runs every open pull request it finds.
+#
+# No credential belongs in this file. A GitHub token comes from GITHUB_TOKEN (or
+# GH_TOKEN) in the environment, and AWS credentials from the usual chain.
 
+[[repos]]
+slug = "pallets/click"
+package_roots = ["src/click"]
 # Real binaries the target's suite shells out to. Staged into the image from this
 # machine, because the image build cannot always reach a package archive.
 system_binaries = ["less", "cat", "sed"]
+
+# The v1 one-shot path (`prflagger check`) and its tests read a single [target].
+# It names the same repository as the first [[repos]] entry above; `core.config`
+# folds it into the repo list, so neither form is authoritative over the other.
+[target]
+slug = "pallets/click"
+fork = "Oruwe/click"          # seeded branches for the differential tests live here
+package_root = "src/click"
+system_binaries = ["less", "cat", "sed"]
+
+# A repo that is not on github.com — a self-hosted server, a mirror, a local path.
+# It is never polled for pull requests; its runs start on request.
+# [[repos]]
+# slug = "demo/shoplib"
+# clone_url = "/srv/git/shoplib.git"
+# package_roots = ["shoplib"]
+
+[server]
+host = "127.0.0.1"
+port = 8000
+poll_interval_s = 120        # conditional requests make this nearly free
+debounce_s = 30              # collapse a force-push storm into one run
+event_retention_days = 7
+
+[sandbox]
+max_concurrent = 0           # 0 -> min(2, cpu_count // 2)
+default_timeout_s = 300
+default_memory_mb = 1024
+
+# Hard caps. A model call that would breach one is refused, and the run says so
+# rather than quietly verifying less than it claims.
+[budget]
+total_usd = 100.0
+per_run_usd = 0.25
+per_repo_daily_usd = 2.00
+
+# The model that reads findings against each repository and suggests changes.
+# Credentials come from the environment only — AWS_BEARER_TOKEN_BEDROCK (a Bedrock
+# API key) or an AWS access key / profile / instance role. Verify with:
+#     python -m prflagger.cli llm check
+[models]
+enabled = "auto"                       # "auto": use a model when credentials exist; "off": never
+light = "anthropic.claude-haiku-4-5"   # naming mined review standards
+heavy = "anthropic.claude-sonnet-5"    # adjudication and suggestions
+region = "us-east-1"
+cache_ttl = "1h"                       # the repository context is a cached prompt prefix
+max_adjudications = 8                  # file groups read per run, highest-ranked first
+
+# USD per million tokens, [input, output]. A model with no price is refused, because a
+# budget cannot be enforced on an unknown price. Check current Bedrock pricing.
+[models.prices]
+"anthropic.claude-haiku-4-5" = [1.0, 5.0]
+"anthropic.claude-sonnet-5" = [3.0, 15.0]
+
+# What each repository's reviewers have enforced, read from merged pull requests.
+# A GitHub token (GITHUB_TOKEN) raises the harvest from 15 pull requests to the limits
+# below; without one GitHub allows only 60 requests an hour.
+[brain]
+harvest_limit = 200       # closed pull requests examined on a repository's first read
+incremental_limit = 100   # per daily refresh after that
+refresh_hours = 24
+min_support = 3           # comments behind a mined standard
+min_reviewers = 2         # distinct reviewers behind it

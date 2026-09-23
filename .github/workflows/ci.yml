@@ -4,51 +4,240 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
-# CLAUDE.md is non-negotiable: never mock Docker, git, or the target repo. So this
-# workflow does not split off a "fast" job that skips the sandbox tests — it runs
-# the real suite, in one job, the same way `pytest tests/ -x -q` does locally.
-# GitHub-hosted ubuntu runners ship Docker Engine already running, and have normal
-# internet access to Docker Hub, PyPI and GitHub — none of the registry-mirror or
-# host-binary staging this repo's session-start hook does for its own sandboxed dev
-# container are needed here.
+# A newer push makes an older run's answer worthless. Cancelling it frees a
+# runner instead of spending minutes computing a result nobody will read.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  FORCE_COLOR: "1"
+
 jobs:
-  test:
+  # Stage 1 — cheap, seconds, no containers. Catches most mistakes before any
+  # runner spends a minute pulling images.
+  static:
+    name: lint + types
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: ruff
+        run: ruff check --output-format=github .
+      - name: mypy
+        run: mypy prflagger/
+
+  # Stage 2 — the suites that need no network and no seeded fixtures. These are
+  # the ones that must never be red, so they gate everything after.
+  unit:
+    name: unit (py${{ matrix.python }})
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: Suites that need neither Docker nor the network
+        run: |
+          pytest -q --durations=10 \
+            tests/test_models.py tests/test_v2_storage.py tests/test_v2_lang.py \
+            tests/test_v2_api.py tests/test_v2_scheduler.py tests/test_v2_janitor.py \
+            tests/test_v2_charter.py tests/test_v2_brain.py \
+            tests/test_v2_llm.py tests/test_v2_adjudicate.py \
+            tests/test_v2_auth.py tests/test_v2_git_auth.py tests/test_v2_deploy.py \
+            tests/test_brain.py tests/test_web.py \
+            tests/test_analysis.py tests/test_privacy.py tests/test_gitsafety.py
+
+  # Stage 3 — real containers. CLAUDE.md forbids mocking Docker, so this is the
+  # slow, honest half: it builds images and runs a real suite inside them.
+  sandbox:
+    name: sandbox (real containers)
+    needs: static
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
-
-      - name: Install
-        run: pip install -e ".[dev,embed]"
-
-      - name: ruff
-        run: ruff check .
-
-      - name: mypy
-        run: mypy prflagger/
-
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
       - name: Docker sanity
         run: docker info
+      - name: Warm the base image
+        # Pulled here so a pull failure reads as a pull failure, rather than as a
+        # confusing timeout inside whichever test happened to run first.
+        run: docker pull python:3.11-slim
+      - name: Sandbox and engine suites
+        run: pytest -q --durations=10 tests/test_v2_sandbox.py tests/test_v2_engine.py
+      - name: Transcripts from the failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-transcripts
+          path: .cache/runs/
+          retention-days: 7
+          if-no-files-found: ignore
 
-      - name: Clone the target repo
-        # seed_target.py refuses to run without this clone already present — on a
-        # fresh checkout nothing has made it yet. Locally it usually already
-        # exists from earlier fixture runs, which is exactly the kind of local
-        # state this workflow can't assume.
-        run: python3 -c "from prflagger.sandbox.runner import bare_clone; bare_clone('pallets/click')"
+  # Stage 4 — does the thing actually start and serve? A green test suite and a
+  # binary that will not boot are not the same claim.
+  smoke:
+    name: service smoke test
+    needs: [unit, sandbox]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # A regular install, not an editable one, run from outside the checkout: that is
+      # how it is deployed, and only that proves the templates, static files and
+      # schema ship inside the package rather than being found in the source tree.
+      - run: pip install ".[dev]"
+      - name: Boot the installed service and exercise it
+        working-directory: ${{ runner.temp }}
+        run: |
+          set -euo pipefail
+          python -c "import prflagger, sys; sys.exit('source tree on the path' if 'site-packages' not in prflagger.__file__ else 0)"
+          python -m prflagger.cli serve --no-watch --port 8123 &
+          SERVICE=$!
+          trap 'kill $SERVICE 2>/dev/null || true' EXIT
+          for _ in $(seq 1 45); do
+            curl -fsS http://127.0.0.1:8123/api/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8123/api/health | tee /dev/stderr | grep -q '"started":true'
+          for path in / /api/repos /api/budget /api/notifications /static/css/app.css; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8123$path")
+            echo "$path -> $code"
+            [ "$code" = "200" ] || { echo "::error::$path returned $code"; exit 1; }
+          done
+      - name: The CLI's own surface
+        working-directory: ${{ runner.temp }}
+        run: |
+          python -m prflagger.cli --help >/dev/null
+          python -m prflagger.cli gc --dry-run
 
-      - name: Seed the target repo's demo branches
-        # A large slice of the suite (test_cli, test_differential, test_probes,
-        # test_report) requires these and fails with a named, non-cryptic error
-        # without them — README documents this as a precondition, but nothing
-        # in this workflow had actually run it.
+  # Stage 4b — the deployment kit, deployed the way DEPLOY.md says. The service runs
+  # in a container and starts sandboxes on the runner's Docker; this proves the
+  # same-path data mount, the Docker socket, the cgroup mount (v2 here, v1 was
+  # checked by hand), sign-in, and a backup taken while serving.
+  deploy:
+    name: deployment (compose)
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the service image
+        run: docker build -f deploy/Dockerfile -t prflagger:latest .
+      - name: Start it as DEPLOY.md does
+        run: |
+          set -euo pipefail
+          DATA="$RUNNER_TEMP/prflagger-data"
+          sudo install -d -o 10001 -g 10001 "$DATA"
+          ADMIN="$(openssl rand -hex 32)"
+          echo "::add-mask::$ADMIN"
+          { echo "DATA=$DATA"; echo "ADMIN=$ADMIN"; } >> "$GITHUB_ENV"
+          {
+            echo "PRFLAGGER_ADMIN_TOKEN=$ADMIN"
+            echo "PRFLAGGER_DATA=$DATA"
+            echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)"
+            echo "PRFLAGGER_PORT=8000"
+          } > deploy/.env
+          docker compose -f deploy/compose.yaml up -d --no-build
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/api/health | tee /dev/stderr | grep -q '"auth":"tokens"'
+      - name: Nothing without a token, everything with one
+        run: |
+          set -euo pipefail
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          [ "$(code http://127.0.0.1:8000/api/repos)" = 401 ]
+          [ "$(code -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8000/api/repos)" = 200 ]
+          [ "$(code -o /dev/null http://127.0.0.1:8000/)" = 303 ]
+      - name: A sandbox started from inside the container is measured
+        run: |
+          docker pull -q python:3.11-slim
+          docker compose -f deploy/compose.yaml exec -T prflagger python - <<'EOF'
+          import asyncio, time
+          from prflagger.sandbox.stream import run_streaming
+          name = f"pf-ci-{int(time.time() * 1000)}"
+          result = asyncio.run(run_streaming(
+              ["docker", "run", "--rm", "--name", name, "--network=none", "--memory=512m",
+               "python:3.11-slim", "python", "-c",
+               "x = bytearray(150 * 1024 * 1024)\nimport time; time.sleep(2)"],
+              timeout_s=120, container_name=name, sample_interval_s=0.3))
+          print("exit", result.returncode, "peak MB", result.peak_rss_mb, "samples", result.samples)
+          assert result.returncode == 0, result.stderr
+          assert result.peak_rss_mb and result.peak_rss_mb >= 140, "memory was not measured"
+          EOF
+      - name: Back up while serving; restore refuses while it runs
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/compose.yaml exec -T prflagger prflagger backup --out "$DATA/b.tar.gz"
+          if docker compose -f deploy/compose.yaml exec -T prflagger prflagger restore "$DATA/b.tar.gz"; then
+            echo "::error::restore ran while the service was running"; exit 1
+          fi
+      - name: Service logs
+        if: always()
+        run: docker compose -f deploy/compose.yaml logs --no-color | tail -100
+
+  # Stage 5 — needs the network and a fork with seeded branches, so it is
+  # reported but does not gate. A fixture that cannot be built is not a defect
+  # in the change under review.
+  seeded:
+    name: seeded fixtures (informational)
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev,embed]"
+      - name: Clone the target repository
+        run: python -c "from prflagger.vcs.worktrees import bare_clone; bare_clone('pallets/click')"
+      - name: Seed its demo branches
         run: python -m scripts.seed_target
-
-      - name: pytest
-        run: pytest tests/ -q
+      - name: The suites that depend on them
+        run: |
+          pytest -q tests/test_cli.py tests/test_differential.py \
+                    tests/test_probes.py tests/test_report.py tests/test_internals.py \
+                    tests/test_norms.py
+      - name: Review history, read live from this repository
+        env:
+          PRFLAGGER_LIVE_GITHUB: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pytest -q -rs tests/test_v2_brain.py -k live

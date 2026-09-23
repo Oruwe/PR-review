@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}PR Flagger{% endblock %}</title>
+<link rel="stylesheet" href="/static/css/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9873;</text></svg>">
+<script>
+  /* Applied before first paint so a dark-mode reload never flashes light. */
+  try {
+    var t = localStorage.getItem("pf-theme");
+    if (t) document.documentElement.setAttribute("data-theme", t);
+  } catch (e) { /* private mode: the OS preference still applies */ }
+</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3 1v14M3 2h9l-2 3 2 3H3" stroke="currentColor" stroke-width="1.7"
+            stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>
+    PR Flagger
+  </a>
+  <nav>{% block nav %}{% endblock %}</nav>
+  <span class="spacer"></span>
+  <span class="pill" id="conn" hidden>offline</span>
+  {% set who = signed_in_as(request) %}
+  {% if who %}
+  <span class="whoami" title="Signed in with the {{ who }} token">{{ who }}</span>
+  <a class="signout" href="/logout" title="Signed in with the {{ who }} token">Sign out</a>
+  {% endif %}
+  <button id="theme" title="Switch between light and dark" aria-label="Switch theme">◐</button>
+</header>
+
+{# Named so it cannot shadow a page's own `notices`: a top-level set in a base
+   template overrides the variable of the same name in every child block. #}
+{% set open_major = open_notices() %}
+{% if open_major %}
+<section class="alert-major" role="alert" aria-label="Major updates awaiting acknowledgement">
+  {% for n in open_major %}
+  <div class="alert-row" data-notice="{{ n.id }}">
+    <span class="alert-icon" aria-hidden="true">⚑</span>
+    <div class="alert-body">
+      <div class="alert-title">
+        <span class="alert-tag">{% if n.kind == 'pr.charter_change' %}Pull request would change the repository{% else %}Major update{% endif %}</span>
+        <a href="/repo/{{ n.repo }}/changes">{{ n.title }}</a>
+      </div>
+      <div class="alert-sub">{{ n.body }}</div>
+    </div>
+    {% if can_write(request) %}<button class="alert-ack" data-ack="{{ n.id }}">Acknowledge</button>{% endif %}
+  </div>
+  {% endfor %}
+</section>
+{% endif %}
+
+<main class="wrap">{% block content %}{% endblock %}</main>
+
+<div class="tooltip" id="tip" role="status" aria-live="polite"></div>
+<script type="module" src="/static/js/app.js"></script>
+<script type="module">
+/* A major update stays on screen until a person says they have seen it. */
+for (const button of document.querySelectorAll("[data-ack]")) {
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    const response = await fetch(`/api/notifications/${button.dataset.ack}/ack`, { method: "POST" });
+    if (response.ok) {
+      button.closest(".alert-row").remove();
+      const banner = document.querySelector(".alert-major");
+      if (banner && !banner.querySelector(".alert-row")) banner.remove();
+    } else {
+      button.disabled = false;
+    }
+  });
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

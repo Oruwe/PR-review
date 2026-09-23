@@ -78,9 +78,19 @@ def _symbol(
 
 
 def module_fqn_for(path: Path, package_root: Path) -> str:
-    """`src/click/parser.py` under `src/click` -> `click.parser`."""
+    """`src/click/parser.py` under `src/click` -> `click.parser`.
+
+    The root contributes its own name only when it *is* a package — that is, when
+    it has an `__init__.py`. A directory that merely contains packages (a
+    repository root, a `src/`) is not part of any import path, and including its
+    name produces fully-qualified names like `my-repo.pkg.mod` that no `import`
+    statement can ever match. That mismatch is silent: every cross-package call
+    simply fails to resolve and the dependency graph comes out empty.
+    """
     relative = path.relative_to(package_root)
-    parts = [package_root.name, *relative.parts]
+    parts = list(relative.parts)
+    if (package_root / "__init__.py").is_file():
+        parts.insert(0, package_root.name)
     if parts[-1] == "__init__.py":
         parts.pop()
     elif parts[-1].endswith(".py"):

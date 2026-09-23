@@ -1,0 +1,384 @@
+{% extends "base.html" %}
+{% block title %}{{ repo.slug }} — PR Flagger{% endblock %}
+{% block nav %}
+  <a href="/repo/{{ repo.slug }}" aria-current="page">Map</a>
+  <a href="/repo/{{ repo.slug }}/prs">Pull requests</a>
+  <a href="/repo/{{ repo.slug }}/changes">Changes</a>
+{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>{{ repo.slug }}</h1>
+    <p class="subtle">
+      What this repository is, before any pull request is considered.
+      {% if atlas %}Measured at <code>{{ atlas.sha[:12] }}</code>.{% endif %}
+    </p>
+  </div>
+  <span class="spacer"></span>
+  {% if can_write(request) %}<button id="rebuild" class="primary">{% if atlas %}Rebuild map{% else %}Build map{% endif %}</button>{% endif %}
+</div>
+
+
+{% if charter %}
+<div class="card" style="margin-bottom:18px">
+  <header>
+    <h2>What this repository is for</h2>
+    <span class="spacer"></span>
+    <a class="pill" href="/repo/{{ repo.slug }}/changes"
+       title="The system's memory of this repository, rebuilt whenever the default branch moves">
+      memory #{{ charter.number }} · {{ charter.sha[:10] }}</a>
+  </header>
+  <p class="subtle" style="margin:-6px 0 12px">Built only from this repository's own files. Every
+    line cites where it says so, and every pull request is judged against this — nothing else.</p>
+
+  {% if charter.summary %}
+  <p class="charter-summary">{{ charter.summary }}</p>
+  {% endif %}
+  <div class="facts" style="margin-bottom:14px">
+    <span class="pill">{{ charter.name }}{% if charter.version %} {{ charter.version }}{% endif %}</span>
+    {% if charter.license %}<span class="pill">{{ charter.license }}</span>{% endif %}
+    <span class="pill">{{ charter.public_api|length }} public symbols</span>
+    <span class="pill">{{ charter.dependencies|length }} runtime dependencies</span>
+    {% for s in charter.standards %}<span class="pill">{{ s }}</span>{% endfor %}
+  </div>
+
+  <div class="grid two">
+    {% for kind, heading in (("purpose", "Goal"), ("target", "Who and what it targets"),
+                              ("capability", "What it does"), ("constraint", "Rules it holds itself to")) %}
+    {% set items = charter.claims_of(kind) %}
+    <div>
+      <h3 style="margin-bottom:6px">{{ heading }}</h3>
+      {% if items %}
+      <ul class="claims">
+        {% for c in items[:8] %}
+        <li><span class="text">{{ c.text }}</span><span class="src">{{ c.source }}</span></li>
+        {% endfor %}
+      </ul>
+      {% if items|length > 8 %}
+      <details class="raw"><summary>{{ items|length - 8 }} more</summary>
+        <ul class="claims">{% for c in items[8:] %}
+          <li><span class="text">{{ c.text }}</span><span class="src">{{ c.source }}</span></li>
+        {% endfor %}</ul>
+      </details>
+      {% endif %}
+      {% else %}
+      <p class="muted" style="font-size:.86rem">The repository does not say.</p>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+
+  {% if charter.entry_points %}
+  <h3 style="margin:16px 0 6px">How it is used</h3>
+  {% for e in charter.entry_points %}<div class="evidence">{{ e }}</div>{% endfor %}
+  {% endif %}
+
+  {% if changes %}
+  <h3 style="margin:16px 0 6px">Recent changes to what it is</h3>
+  <ul class="claims">
+    {% for ch in changes %}
+    <li>
+      <span class="chip {{ LEVEL_STATUS.get(ch.level, 'neutral') }}"><span class="dot"></span>{{ ch.level }}</span>
+      <span class="text"><code>{{ ch.from_sha[:8] }}</code> → <code>{{ ch.to_sha[:8] }}</code>
+        · {{ ch.signals|length }} {{ 'signal' if ch.signals|length == 1 else 'signals' }}</span>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+</div>
+{% elif atlas %}
+<div class="notice warning" style="margin-bottom:16px">
+  <span class="ico" aria-hidden="true">⚠</span>
+  <div><strong>No memory of this repository's purpose yet.</strong> Rebuild the map to read
+    its README, metadata and entry points. Until then, findings are ranked without knowing
+    what the repository is for.</div>
+</div>
+{% endif %}
+
+{% if brain and (brain.declared or brain.mined or brain.comments_seen or brain.note) %}
+<div class="card" style="margin-bottom:18px" id="norms">
+  <header>
+    <h2>What this repository holds itself to</h2>
+    <span class="spacer"></span>
+    {% if can_write(request) %}<button id="relearn" title="Read new review history now and mine the norms again">Re-read reviews</button>{% endif %}
+  </header>
+  <p class="subtle" style="margin-top:0">Standards the repository declares in its own
+    configuration, and standards its reviewers enforced: a review comment counts only if the
+    author changed the code after it and the pull request merged.</p>
+
+  {% if brain.declared %}
+  <h3 style="margin:12px 0 6px">Declared by its configuration</h3>
+  <ul class="claims">
+    {% for n in brain.declared %}
+    <li><span class="text">{{ n.statement }}</span>
+      {% for e in n.evidence %}<span class="src">{{ e.where }}</span>{% endfor %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <h3 style="margin:16px 0 6px">Enforced in review</h3>
+  {% if brain.mined %}
+  <ul class="norms">
+    {% for n in brain.mined %}
+    <li id="norm-{{ n.id }}">
+      <div class="norm-head">
+        <strong>{{ n.statement }}</strong>
+        <span class="pill" title="comments behind it · distinct reviewers">{{ n.support }} comments · {{ n.distinct_reviewers }} reviewers</span>
+      </div>
+      {% if n.named_by != 'quote' and n.quote %}
+      <blockquote class="norm-quote">“{{ n.quote }}”</blockquote>
+      {% endif %}
+      <div class="norm-evidence">
+        {% for e in n.evidence[:8] %}
+          {% if e.url %}<a href="{{ e.url }}" rel="noopener">#{{ e.pr }}</a>{% else %}<span>#{{ e.pr }}</span>{% endif %}{% if e.where %}<span class="muted"> {{ e.where }}</span>{% endif %}{% if not loop.last %} · {% endif %}
+        {% endfor %}
+        {% if n.evidence|length > 8 %}<span class="muted"> +{{ n.evidence|length - 8 }} more</span>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted" style="margin:0">None yet.</p>
+  {% endif %}
+  <p class="muted" style="font-size:.8rem;margin:10px 0 0">
+    {% if brain.on_github %}
+      {{ brain.pulls_read }} merged pull request{{ '' if brain.pulls_read == 1 else 's' }} read ·
+      {{ brain.comments_enforced }} of {{ brain.comments_seen }} review comments enforced{% if brain.retention is not none %} ({{ (brain.retention * 100)|round|int }}%){% endif %}.
+    {% endif %}
+    {% if brain.mined %}{% set method = brain.mined[0] %}
+      Grouped {{ 'by meaning (sentence embeddings)' if method.clustered_by == 'semantic' else 'by shared words — install sentence-transformers to group by meaning' }};
+      {{ 'stated as each group’s most representative comment, quoted' if method.named_by == 'quote' else 'stated by ' ~ method.named_by ~ ' from each group, with the comments linked' }}.
+    {% endif %}
+    {% if brain.note %}{{ brain.note }}.{% endif %}
+  </p>
+</div>
+{% endif %}
+
+{% if not atlas %}
+<div class="card empty">
+  <h3>No map yet</h3>
+  <p class="subtle">Building it clones the repository and reads it &mdash; no model is
+     involved, and nothing is sent anywhere. It takes a few seconds on a small repository
+     and a minute or two on a large one.</p>
+</div>
+{% else %}
+
+<div class="stats" style="margin-bottom:20px">
+  <div class="stat">
+    <div class="value">{{ "{:,}".format(atlas.totals.loc) }}</div>
+    <div class="label">Lines</div>
+    <div class="sub">{{ atlas.totals.files }} files</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.totals.symbols }}</div>
+    <div class="label">Symbols</div>
+    <div class="sub">{{ atlas.totals.call_edges }} call edges</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.modules|length }}</div>
+    <div class="label">Modules</div>
+    <div class="sub">{{ atlas.test_topology.modules_with_tests }} carry tests</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.totals.commits_window }}</div>
+    <div class="label">Commits</div>
+    <div class="sub">last {{ atlas.totals.churn_days }} days</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.totals.contributors }}</div>
+    <div class="label">Contributors</div>
+    <div class="sub">in that window</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.totals.test_files }}</div>
+    <div class="label">Test files</div>
+  </div>
+</div>
+
+{% if atlas.analysis_depth != "structural" %}
+<div class="notice warning" style="margin-bottom:16px">
+  <span class="ico" aria-hidden="true">⚠</span>
+  <div><strong>Surface depth only.</strong>
+    {% if atlas.depth_note %}{{ atlas.depth_note }}.{% else %}There is no exact symbol
+    extractor for {{ atlas.toolchain.display }} yet, so sizes, churn and test topology
+    below are measured but the call graph and public surface are not.{% endif %}
+    This is stated rather than implied.</div>
+</div>
+{% endif %}
+
+<div class="grid two">
+  <div class="card">
+    <header>
+      <h2>Where the code is</h2>
+      <span class="spacer"></span>
+      <select id="treemap-color" aria-label="Colour the map by">
+        <option value="churn">Colour by churn</option>
+        <option value="untested">Colour by untested share</option>
+        <option value="symbols">Colour by symbol density</option>
+      </select>
+    </header>
+    <p class="subtle" style="margin:-6px 0 12px">Each rectangle is a module, sized by lines
+      of code. <span id="treemap-caption">Darker means more commits in the window.</span></p>
+    <div id="treemap" style="min-height:300px"></div>
+  </div>
+
+  <div class="card">
+    <header><h2>What depends on what</h2></header>
+    <p class="subtle" style="margin:-6px 0 12px">Modules that call into one another. Drag to
+      rearrange; the thickness of a line is how many call sites it carries.</p>
+    <div id="depgraph"></div>
+  </div>
+</div>
+
+<div class="grid two" style="margin-top:16px">
+  <div class="card">
+    <header><h2>Hotspots</h2></header>
+    <p class="subtle" style="margin:-6px 0 12px">Churn &times; size &times; untested share. The
+      three factors are shown so you can disagree with the weighting and still use the
+      numbers. This ranks where to look, not what is wrong.</p>
+    {% if atlas.hotspots %}
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Module</th><th class="num">Score</th><th>Churn</th>
+          <th>Size</th><th>Untested</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for h in atlas.hotspots[:8] %}
+        <tr>
+          <td><code>{{ h.name }}</code>
+            <div class="muted" style="font-size:.75rem">{{ h.commits }} commits ·
+              {{ "{:,}".format(h.loc) }} lines · {{ h.authors }} authors</div></td>
+          <td class="num"><strong>{{ "%.3f"|format(h.score) }}</strong></td>
+          <td style="width:82px"><div class="bar"><span style="width:{{ (h.churn_factor*100)|round }}%;background:var(--seq-400)"></span></div></td>
+          <td style="width:82px"><div class="bar"><span style="width:{{ (h.size_factor*100)|round }}%;background:var(--seq-400)"></span></div></td>
+          <td style="width:82px"><div class="bar"><span style="width:{{ (h.untested_factor*100)|round }}%;background:var(--seq-400)"></span></div></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}<p class="muted">No churn recorded in the window.</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <header><h2>Languages</h2></header>
+    <p class="subtle" style="margin:-6px 0 12px">By lines of code.</p>
+    <div class="bar" id="langbar" style="height:14px;margin-bottom:6px"></div>
+    <div class="legend" id="langlegend"></div>
+
+    <h3 style="margin-top:22px">Modules with no tests beside them</h3>
+    <p class="subtle" style="margin:4px 0 10px">A test file next to the code is a structural
+      signal, not coverage. The coverage probe supplies the real number per run.</p>
+    {% if atlas.test_topology.untested_modules %}
+      <div style="display:flex;flex-wrap:wrap;gap:5px">
+      {% for m in atlas.test_topology.untested_modules[:24] %}
+        <span class="pill">{{ m }}</span>
+      {% endfor %}
+      </div>
+    {% else %}
+      <p><span class="chip good"><span class="dot"></span>every module has tests beside it</span></p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <header>
+    <h2>How this repository will be run</h2>
+    <span class="spacer"></span>
+    <span class="pill">{{ atlas.toolchain.display }}</span>
+  </header>
+  <p class="subtle" style="margin:-6px 0 12px">Detected from the files in the repository.
+    Every pull request is executed with exactly these commands, in a container with no
+    network, no capabilities and a read-only checkout.</p>
+  <dl class="contract">
+    <dt>Image</dt><dd><code>{{ atlas.toolchain.base_image }}</code></dd>
+    {% if atlas.toolchain.install %}
+    <dt>Install</dt><dd>{% for c in atlas.toolchain.install %}
+      <div class="evidence">{{ c|join(' ') }}</div>{% endfor %}</dd>
+    {% endif %}
+    <dt>Tests</dt><dd><div class="evidence">{{ atlas.toolchain.test.argv|join(' ') }}</div></dd>
+    {% if atlas.toolchain.lints %}
+    <dt>Lint</dt><dd>{% for l in atlas.toolchain.lints %}
+      <div class="evidence">{{ l.argv|join(' ') }}</div>{% endfor %}</dd>
+    {% endif %}
+    {% if atlas.toolchain.coverage %}
+    <dt>Coverage</dt><dd><div class="evidence">{{ atlas.toolchain.coverage|join(' ') }}</div></dd>
+    {% endif %}
+  </dl>
+</div>
+
+{% if atlas.surface %}
+<div class="card" style="margin-top:16px">
+  <header>
+    <h2>Public surface</h2>
+    <span class="spacer"></span>
+    <span class="pill">{{ atlas.surface|length }} symbols</span>
+  </header>
+  <p class="subtle" style="margin:-6px 0 12px">What this repository exposes. A pull request
+    that adds to or removes from this list is flagged.</p>
+  <details class="raw">
+    <summary>Show all {{ atlas.surface|length }}</summary>
+    <pre>{% for s in atlas.surface %}{{ s.kind[:4] }}  {{ s.fqn }}  ({{ s.file }}:{{ s.line }})
+{% endfor %}</pre>
+  </details>
+</div>
+{% endif %}
+
+{% endif %}
+
+<script type="application/json" id="atlas-data">{{ (atlas or {})|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+import { post } from "/static/js/api.js";
+import { drawTreemap, drawGraph, drawLanguages } from "/static/js/atlas.js";
+
+const raw = document.getElementById("atlas-data").textContent;
+const atlas = JSON.parse(raw || "{}");
+if (atlas && atlas.modules) {
+  drawTreemap(atlas, document.getElementById("treemap"));
+  drawGraph(atlas, document.getElementById("depgraph"));
+  drawLanguages(atlas, document.getElementById("langbar"), document.getElementById("langlegend"));
+  document.getElementById("treemap-color").addEventListener("change", (e) => {
+    drawTreemap(atlas, document.getElementById("treemap"), e.target.value);
+    const captions = {
+      churn: "Darker means more commits in the window.",
+      untested: "Darker means a larger share of files with no tests beside them.",
+      symbols: "Darker means more symbols per line — denser code.",
+    };
+    document.getElementById("treemap-caption").textContent = captions[e.target.value];
+  });
+}
+
+document.getElementById("rebuild")?.addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true; button.textContent = "Reading the repository…";
+  try {
+    await post("/api/repos/{{ repo.slug }}/atlas", {});
+    location.reload();
+  } catch (error) {
+    button.disabled = false; button.textContent = "Build map";
+    alert(error.message);
+  }
+});
+
+const relearn = document.getElementById("relearn");
+if (relearn) {
+  relearn.addEventListener("click", async () => {
+    relearn.disabled = true; relearn.textContent = "Reading reviews…";
+    try {
+      await post("/api/repos/{{ repo.slug }}/norms", {});
+      location.reload();
+    } catch (error) {
+      relearn.disabled = false; relearn.textContent = "Re-read reviews";
+      alert(error.message);
+    }
+  });
+}
+</script>
+{% endblock %}

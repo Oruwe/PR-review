@@ -15,6 +15,7 @@ import pytest
 
 from prflagger import llm
 from prflagger.characterize import differential as differential_module
+from prflagger.llm import cache as llm_cache
 from prflagger.models import Finding, Norm
 from prflagger.probes._support import norm_for
 from prflagger.report.rank import rank
@@ -49,14 +50,14 @@ def test_embed_serves_cached_vectors_without_the_model(
         def encode(self, texts: list[str]) -> list[list[float]]:
             return [[0.5, 0.25] for _ in texts]
 
-    monkeypatch.setattr(llm, "_embed_model", lambda: FakeModel())
+    monkeypatch.setattr(llm_cache, "_embed_model", lambda: FakeModel())
     first = llm.embed(["a norm statement"])
     assert first == [[0.5, 0.25]]
 
     def unavailable() -> object:
         raise llm.EmbeddingUnavailable("model gone")
 
-    monkeypatch.setattr(llm, "_embed_model", unavailable)
+    monkeypatch.setattr(llm_cache, "_embed_model", unavailable)
     assert llm.embed(["a norm statement"]) == [[0.5, 0.25]]
 
 
@@ -71,7 +72,7 @@ def test_a_partially_cached_batch_only_encodes_what_is_missing(
             encoded.append(list(texts))
             return [[float(len(text))] for text in texts]
 
-    monkeypatch.setattr(llm, "_embed_model", lambda: FakeModel())
+    monkeypatch.setattr(llm_cache, "_embed_model", lambda: FakeModel())
     llm.embed(["one"])
     llm.embed(["one", "two"])
 

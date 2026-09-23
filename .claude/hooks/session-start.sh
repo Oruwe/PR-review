@@ -13,10 +13,22 @@ fi
 # --- Python dependencies -------------------------------------------------------
 # Installed for the interpreter that runs pytest, so the suite can import both the
 # project's deps and the project itself.
-pip install --quiet --disable-pip-version-check --root-user-action=ignore boto3 structlog pytest >/dev/null
+pip install --quiet --disable-pip-version-check --root-user-action=ignore \
+  boto3 structlog pytest pytest-asyncio \
+  fastapi 'uvicorn[standard]' httpx jinja2 networkx numpy anthropic >/dev/null
 for tool in ruff mypy; do
   command -v "$tool" >/dev/null 2>&1 || pip install --quiet --disable-pip-version-check --root-user-action=ignore "$tool" >/dev/null
 done
+
+# mypy installed as a uv tool resolves imports against its own environment, not the
+# project's, so it reports every third-party import as missing unless it is given
+# the same libraries.
+if command -v uv >/dev/null 2>&1 && [ -d /root/.local/share/uv/tools/mypy ]; then
+  uv tool install --force mypy \
+    --with httpx --with jinja2 --with fastapi --with 'uvicorn[standard]' \
+    --with anthropic --with structlog --with networkx --with numpy --with boto3 \
+    --with types-networkx >/dev/null 2>&1 || true
+fi
 
 # --- Docker daemon -------------------------------------------------------------
 if ! docker info >/dev/null 2>&1; then

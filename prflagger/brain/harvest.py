@@ -1,17 +1,26 @@
-"""Fetch merged pull requests and cache them.
+"""Fetch merged pull requests with their review comments and commits.
 
-The Brain is built ahead of time and read at request time. A PR check that waited on two
-hundred API calls would be unusable in CI, which is why harvesting never appears in the
-per-PR path.
+v1 shelled out to the `gh` CLI, which is not installed everywhere this runs —
+including where it was developed, so the Brain was dead on arrival there. This
+goes through `vcs.github.GitHub` over REST, so the only requirement is network
+access and, for anything beyond a handful of pull requests, a token in the
+environment.
 
-Raw responses are stored unmodified; filtering happens in enforce.py.
+Two callers, two shapes of use:
+
+* `harvest()` — the v1 one-shot path behind `prflagger brain build`. It writes
+  the raw records to `.cache/brain/<slug>/prs.json` and never re-fetches what is
+  already on disk.
+* `fetch_reviews()` — the service's incremental path. It walks closed pull
+  requests newest-first and stops at the last one it already saw, so a daily
+  refresh of a busy repository costs a few requests rather than a few hundred.
+
+Raw responses are kept in GitHub's own shape; filtering happens in `enforce.py`.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
-import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -19,59 +28,87 @@ from typing import Any
 import structlog
 
 from prflagger.sandbox.runner import cache_root
+from prflagger.vcs.github import GitHub, GitHubError
 
-__all__ = ["GhUnavailable", "harvest", "prs_path"]
+__all__ = ["GhUnavailable", "HarvestUnavailable", "fetch_reviews", "harvest", "prs_path"]
 
 log = structlog.get_logger(__name__)
 
 
-class GhUnavailable(RuntimeError):
-    """The `gh` CLI is missing or cannot reach the API."""
+class HarvestUnavailable(RuntimeError):
+    """GitHub could not be reached, or refused the request."""
+
+
+#: The v1 name. Kept so existing callers and scripts keep working; there is no
+#: longer anything `gh`-specific about it.
+GhUnavailable = HarvestUnavailable
 
 
 def prs_path(repo_slug: str) -> Path:
     return cache_root() / "brain" / repo_slug.replace("/", "__") / "prs.json"
 
 
-def harvest(repo_slug: str, *, limit: int = 150) -> Path:
-    """Fetch merged PRs via `gh` CLI: metadata, review comments, commits with timestamps.
-    Write to .cache/brain/<slug>/prs.json. Never re-fetch what is cached."""
+def fetch_reviews(
+    github: GitHub,
+    slug: str,
+    *,
+    limit: int = 150,
+    since: str | None = None,
+) -> list[dict[str, Any]]:
+    """Merged pull requests, newest first, each with its review comments and commits.
+
+    `limit` bounds how many *closed* pull requests are examined; `since` is the
+    `updated_at` of the newest one a previous call already recorded, and the walk
+    stops there. Each merged pull request costs two further requests (comments,
+    commits), which is why both bounds exist.
+    """
+    try:
+        closed = github.closed_pulls(slug, limit=limit, since=since)
+    except GitHubError as error:
+        raise HarvestUnavailable(str(error)) from error
+
+    records: list[dict[str, Any]] = []
+    for pull in closed:
+        if not pull.get("merged_at"):
+            continue  # an unmerged pull request enforced nothing; do not pay for it
+        number = int(pull["number"])
+        try:
+            comments = github.review_comments(slug, number)
+            commits = github.pull_commits(slug, number)
+        except GitHubError as error:
+            raise HarvestUnavailable(f"{slug}#{number}: {error}") from error
+        records.append({
+            "number": number,
+            "title": pull.get("title", ""),
+            "body": pull.get("body") or "",
+            "merged_at": pull.get("merged_at"),
+            "updated_at": pull.get("updated_at"),
+            "html_url": pull.get("html_url", ""),
+            "user": (pull.get("user") or {}).get("login", ""),
+            "review_comments": comments,
+            "commits": commits,
+        })
+    return records
+
+
+def harvest(repo_slug: str, *, limit: int = 150, github: GitHub | None = None) -> Path:
+    """Fetch merged PRs with review comments and commits into `prs.json`.
+
+    Never re-fetches what is cached: rate limits bite, and a demo must never
+    depend on the network.
+    """
     path = prs_path(repo_slug)
     if path.is_file():
-        # Never re-fetch what is cached: rate limits bite, and a demo must never
-        # depend on the network.
         log.info("harvest.cached", repo=repo_slug, path=str(path))
         return path
 
-    if shutil.which("gh") is None:
-        raise GhUnavailable(
-            "the gh CLI is not installed; harvest needs it to read merged pull requests"
-        )
-
     started = time.monotonic()
-    pulls = _paged(
-        f"repos/{repo_slug}/pulls",
-        {"state": "closed", "sort": "updated", "direction": "desc"},
-        limit,
-    )
-    merged = [pull for pull in pulls if pull.get("merged_at")]
-
-    records: list[dict[str, Any]] = []
-    for pull in merged:
-        number = int(pull["number"])
-        records.append(
-            {
-                "number": number,
-                "title": pull.get("title", ""),
-                "body": pull.get("body") or "",
-                "merged_at": pull.get("merged_at"),
-                "user": (pull.get("user") or {}).get("login", ""),
-                "review_comments": _paged(
-                    f"repos/{repo_slug}/pulls/{number}/comments", {}, 100
-                ),
-                "commits": _paged(f"repos/{repo_slug}/pulls/{number}/commits", {}, 100),
-            }
-        )
+    client = github or GitHub()
+    try:
+        records = fetch_reviews(client, repo_slug, limit=limit)
+    finally:
+        if github is None:
+            client.close()
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(records, indent=2), encoding="utf-8")
@@ -79,45 +116,7 @@ def harvest(repo_slug: str, *, limit: int = 150) -> Path:
         "harvested",
         repo=repo_slug,
         merged=len(records),
+        requests=client.requests_made,
         wall_s=round(time.monotonic() - started, 1),
     )
     return path
-
-
-def _paged(endpoint: str, params: dict[str, str], limit: int) -> list[dict[str, Any]]:
-    """`gh api --paginate`, which handles Link headers for us."""
-    query = "".join(f"&{key}={value}" for key, value in params.items())
-    argv = [
-        "gh",
-        "api",
-        "--paginate",
-        "--method",
-        "GET",
-        f"{endpoint}?per_page=100{query}",
-    ]
-    completed = _gh(argv)
-    if completed.returncode != 0:
-        raise GhUnavailable(f"gh api {endpoint} failed: {completed.stderr.strip()[:300]}")
-    items: list[dict[str, Any]] = []
-    # --paginate concatenates JSON arrays; decode them one after another.
-    decoder = json.JSONDecoder()
-    index = 0
-    text = completed.stdout
-    while index < len(text):
-        while index < len(text) and text[index].isspace():
-            index += 1
-        if index >= len(text):
-            break
-        payload, index = decoder.raw_decode(text, index)
-        if isinstance(payload, list):
-            items.extend(item for item in payload if isinstance(item, dict))
-        if len(items) >= limit:
-            break
-    return items[:limit]
-
-
-def _gh(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    """The single point where this process shells out to gh."""
-    return subprocess.run(  # noqa: S603
-        argv, capture_output=True, text=True, check=False, timeout=300
-    )

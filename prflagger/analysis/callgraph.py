@@ -17,8 +17,34 @@ from prflagger.models import Symbol
 __all__ = ["build_call_graph", "index_symbols", "package_files"]
 
 
+#: Directories that are never the project's own source. Walking into them from a
+#: repository root means parsing a virtualenv or a vendored tree on every build.
+_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn", "node_modules", "__pycache__", ".venv", "venv", "env",
+    ".tox", ".nox", "build", "dist", "target", "vendor", "site-packages",
+    ".mypy_cache", ".pytest_cache", ".ruff_cache", ".eggs",
+})
+
+
 def package_files(package_root: Path) -> list[Path]:
-    return sorted(p for p in package_root.rglob("*.py") if p.is_file())
+    """Every Python file under `package_root`, skipping what is not its source."""
+    found: list[Path] = []
+    stack = [package_root]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = sorted(current.iterdir())
+        except OSError:
+            continue
+        for entry in entries:
+            if entry.is_symlink():
+                continue
+            if entry.is_dir():
+                if entry.name not in _SKIP_DIRS and not entry.name.startswith("."):
+                    stack.append(entry)
+            elif entry.suffix == ".py" and entry.is_file():
+                found.append(entry)
+    return sorted(found)
 
 
 def index_symbols(package_root: Path) -> dict[str, Symbol]:
@@ -30,11 +56,21 @@ def index_symbols(package_root: Path) -> dict[str, Symbol]:
     return index
 
 
+#: A bare-name call matching more than this many symbols is not resolution, it is
+#: a coincidence of naming. Recording all of them does not add a false positive —
+#: it adds dozens, and on a repository where `run` or `get` is defined in forty
+#: places it draws an edge from every module to every other, which makes the
+#: dependency graph say nothing. SPEC.md accepts false positives over false
+#: negatives; that holds for a plausible handful, not for an exhaustive list.
+_MAX_NAME_MATCHES = 8
+
+
 def build_call_graph(package_root: Path) -> dict[str, set[str]]:
     """caller fqn -> set of callee fqns.
 
     Name-based resolution: resolve imports where possible, fall back to matching on the
-    bare attribute/function name.
+    bare attribute/function name, and drop a fallback match too ambiguous to mean
+    anything (see `_MAX_NAME_MATCHES`).
     """
     symbols = index_symbols(package_root)
     by_name: dict[str, set[str]] = defaultdict(set)
@@ -87,6 +123,13 @@ class _CallCollector:
         self.by_name = by_name
         self.edges: dict[str, set[str]] = defaultdict(set)
 
+    def _fallback(self, name: str) -> set[str]:
+        """The bare-name match, unless the name is too common to carry meaning."""
+        matches = self.by_name.get(name, ())
+        if len(matches) > _MAX_NAME_MATCHES:
+            return set()
+        return set(matches)
+
     def visit_body(
         self, body: list[ast.stmt], *, enclosing: str | None, prefix: str, inside_class: bool
     ) -> None:
@@ -130,7 +173,7 @@ class _CallCollector:
             imported = self.imports.get(func.id)
             if imported and imported in self.symbols:
                 return {imported}
-            return set(self.by_name.get(func.id, ()))
+            return self._fallback(func.id)
         if isinstance(func, ast.Attribute):
             if isinstance(func.value, ast.Name):
                 base = self.imports.get(func.value.id)
@@ -139,7 +182,7 @@ class _CallCollector:
                     if qualified in self.symbols:
                         return {qualified}
             # `obj.method()` — the receiver's type is unknown, so match the bare name.
-            return set(self.by_name.get(func.attr, ()))
+            return self._fallback(func.attr)
         return set()
 
 

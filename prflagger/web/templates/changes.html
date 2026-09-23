@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}{{ repo.slug }} changes — PR Flagger{% endblock %}
+{% block nav %}
+  <a href="/repo/{{ repo.slug }}">Map</a>
+  <a href="/repo/{{ repo.slug }}/prs">Pull requests</a>
+  <a href="/repo/{{ repo.slug }}/changes" aria-current="page">Changes</a>
+{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>How {{ repo.slug }} has changed</h1>
+    <p class="subtle">Each time the default branch moves, the system rebuilds its memory of
+      what this repository is and compares it with the last one.</p>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:18px">
+  <header><h2>How loudly each change is announced</h2></header>
+  <ul class="claims">
+    <li><span class="chip critical"><span class="dot"></span>major</span>
+      <span class="text">Changes what the repository <em>is</em> — its stated purpose, a way of
+        running it, a fifth of its public API, its major version, license or ecosystem.
+        Shown on every page until acknowledged{% if webhook %}, and pushed to the configured
+        webhook{% endif %}.</span></li>
+    <li><span class="chip serious"><span class="dot"></span>notable</span>
+      <span class="text">A real change to the charter that does not break it. Recorded here as
+        a notification; does not interrupt anyone.</span></li>
+    <li><span class="chip neutral"><span class="dot"></span>minor</span>
+      <span class="text">Kept in the history below. Nothing is announced.</span></li>
+  </ul>
+  {% if not webhook %}
+  <p class="muted" style="font-size:.8rem;margin-top:8px">No webhook configured. Set
+    <code>PRFLAGGER_NOTIFY_WEBHOOK</code> in the environment to push major updates to Slack,
+    Discord or anything that accepts a JSON POST.</p>
+  {% endif %}
+</div>
+
+{% if notices %}
+<div class="card" style="margin-bottom:18px">
+  <header><h2>Notifications</h2></header>
+  {% for n in notices %}
+  <div class="finding {{ LEVEL_STATUS.get(n.level, 'warning') }}" style="margin-bottom:10px">
+    <header>
+      <span class="chip {{ LEVEL_STATUS.get(n.level, 'warning') }}"><span class="dot"></span>{{ n.level }}</span>
+      <strong style="overflow-wrap:anywhere">{{ n.title }}</strong>
+      <span class="spacer" style="flex:1"></span>
+      {% if n.acknowledged_at %}<span class="pill">acknowledged</span>
+      {% elif can_write(request) %}<button data-ack="{{ n.id }}">Acknowledge</button>{% endif %}
+    </header>
+    <p class="subtle" style="margin:0 0 6px">{{ n.body }}</p>
+    {% for line in n.evidence %}<div class="evidence">{{ line }}</div>{% endfor %}
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="card">
+  <header>
+    <h2>History</h2>
+    <span class="spacer"></span>
+    <span class="pill">{{ history|length }} {{ 'version' if history|length == 1 else 'versions' }} remembered</span>
+  </header>
+  {% if changes %}
+    {% for ch in changes %}
+    <div style="padding:12px 0;border-bottom:1px solid var(--grid)">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+        <span class="chip {{ LEVEL_STATUS.get(ch.level, 'neutral') }}"><span class="dot"></span>{{ ch.level }}</span>
+        <code>{{ ch.from_sha[:10] }}</code> → <code>{{ ch.to_sha[:10] }}</code>
+      </div>
+      <ul class="claims">
+        {% for sig in ch.signals %}
+        <li>
+          <span class="chip {{ LEVEL_STATUS.get(sig.level, 'neutral') }}" style="min-width:74px"><span class="dot"></span>{{ sig.level }}</span>
+          <span class="text"><strong>{{ sig.detail }}</strong>
+            {% if sig.evidence %}<div class="muted" style="font-size:.8rem;overflow-wrap:anywhere">{{ sig.evidence }}</div>{% endif %}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endfor %}
+  {% elif charter %}
+    <p class="muted">Memory #{{ charter.number }} was built at <code>{{ charter.sha[:10] }}</code>.
+      Nothing has changed since.</p>
+  {% else %}
+    <p class="muted">No memory of this repository has been built yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

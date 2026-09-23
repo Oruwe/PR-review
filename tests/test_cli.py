@@ -45,23 +45,28 @@ def _run(*argv: str) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _worktree() -> str:
-    root = REPO_ROOT / ".cache" / "worktrees" / "pallets__click"
-    checkouts = sorted(child for child in root.iterdir() if child.is_dir())
-    assert checkouts, "no target worktree; run the suite once to create it"
-    return str(checkouts[0])
+@pytest.fixture(scope="module")
+def checkout(head_worktree: Path) -> str:
+    """A checkout of the target, created on demand.
+
+    This used to scan `.cache/worktrees/` for whatever an earlier test had left
+    there, so it passed only when another suite happened to run first. Run on its
+    own — as CI's seeded job does — it found nothing. The shared session fixture
+    creates the checkout itself, so this no longer depends on test order.
+    """
+    return str(head_worktree)
 
 
 @pytest.mark.parametrize("branch", sorted(EXPECTED))
 def test_check_produces_a_report_for_each_seeded_branch(
-    branch: str, seeds: dict[str, dict[str, str]], tmp_path: Path
+    branch: str, checkout: str, seeds: dict[str, dict[str, str]], tmp_path: Path
 ) -> None:
     meta = seeds[branch]
     out = tmp_path / "report.html"
 
     started = time.monotonic()
     result = _run(
-        "check", "--repo", _worktree(), "--base", meta["base"], "--head", meta["head"],
+        "check", "--repo", checkout, "--base", meta["base"], "--head", meta["head"],
         "--out", str(out),
     )
     elapsed = time.monotonic() - started
@@ -77,14 +82,14 @@ def test_check_produces_a_report_for_each_seeded_branch(
 
 
 def test_check_names_what_it_could_not_verify(
-    seeds: dict[str, dict[str, str]], tmp_path: Path
+    checkout: str, seeds: dict[str, dict[str, str]], tmp_path: Path
 ) -> None:
     """Degrade explicitly: a run that could not do behavioural verification says so,
     both on stdout and in the report's coverage statement."""
     meta = seeds["seed/untested-api"]
     out = tmp_path / "report.html"
     result = _run(
-        "check", "--repo", _worktree(), "--base", meta["base"], "--head", meta["head"],
+        "check", "--repo", checkout, "--base", meta["base"], "--head", meta["head"],
         "--out", str(out),
     )
 
@@ -98,12 +103,14 @@ def test_check_names_what_it_could_not_verify(
         assert "skipped" in html
 
 
-def test_check_emits_no_verdict(seeds: dict[str, dict[str, str]], tmp_path: Path) -> None:
+def test_check_emits_no_verdict(
+    checkout: str, seeds: dict[str, dict[str, str]], tmp_path: Path
+) -> None:
     """No code path may produce approve, reject, looks good, risky, or a score."""
     meta = seeds["seed/untested-api"]
     out = tmp_path / "report.html"
     result = _run(
-        "check", "--repo", _worktree(), "--base", meta["base"], "--head", meta["head"],
+        "check", "--repo", checkout, "--base", meta["base"], "--head", meta["head"],
         "--out", str(out),
     )
     combined = (result.stdout + out.read_text(encoding="utf-8")).lower()
@@ -146,14 +153,17 @@ def test_an_unknown_command_is_rejected() -> None:
 
 
 def test_check_in_process_writes_a_report(
-    seeds: dict[str, dict[str, str]], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    checkout: str,
+    seeds: dict[str, dict[str, str]],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     from prflagger.cli import main
 
     meta = seeds["seed/untested-api"]
     out = tmp_path / "report.html"
     code = main(
-        ["check", "--repo", _worktree(), "--base", meta["base"], "--head", meta["head"],
+        ["check", "--repo", checkout, "--base", meta["base"], "--head", meta["head"],
          "--out", str(out)]
     )
 
@@ -167,14 +177,18 @@ def test_check_in_process_writes_a_report(
 def test_brain_build_falls_back_to_a_declarative_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With no gh on PATH the brain still builds, and says what it could not mine."""
-    from prflagger.brain import harvest as harvest_module
+    """When GitHub refuses the harvest the brain still builds, and says what it could
+    not mine. The refusal is a real HTTP 403 from a local server standing in for the API."""
     from prflagger.cli import main
+    from tests.github_fixture import RecordedGitHub, serve
 
     monkeypatch.setenv("PRFLAGGER_CACHE_DIR", str(tmp_path))
-    monkeypatch.setattr(harvest_module.shutil, "which", lambda _: None)
-
-    assert main(["brain", "build", "--repo", "pallets/click"]) == 0
+    refusing = RecordedGitHub(
+        statuses={"/repos/pallets/click/pulls": (403, "API rate limit exceeded")}
+    )
+    with serve(refusing):
+        monkeypatch.setenv("PRFLAGGER_GITHUB_API", refusing.base_url)
+        assert main(["brain", "build", "--repo", "pallets/click"]) == 0
 
     captured = capsys.readouterr()
     assert "harvest unavailable" in captured.err
@@ -196,7 +210,10 @@ def test_norms_in_process_reports_when_there_is_nothing_yet(
 
 
 def test_a_failing_probe_becomes_a_coverage_fact_not_a_crash(
-    seeds: dict[str, dict[str, str]], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    checkout: str,
+    seeds: dict[str, dict[str, str]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A probe that blows up must be named in the coverage statement, never swallowed."""
     import prflagger.cli as cli_module
@@ -209,7 +226,7 @@ def test_a_failing_probe_becomes_a_coverage_fact_not_a_crash(
     meta = seeds["seed/untested-api"]
     out = tmp_path / "report.html"
     assert cli_module.main(
-        ["check", "--repo", _worktree(), "--base", meta["base"], "--head", meta["head"],
+        ["check", "--repo", checkout, "--base", meta["base"], "--head", meta["head"],
          "--out", str(out)]
     ) == 0
 

@@ -8,3 +8,7 @@ __pycache__/
 .coverage
 .coverage.*
 htmlcov/
+build/
+dist/
+# Deployment secrets: tokens and keys live only in this file on the server.
+deploy/.env
