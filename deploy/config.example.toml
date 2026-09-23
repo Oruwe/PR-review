@@ -1,4 +1,4 @@
-# A starting configuration for a deployed service: two public repositories to watch
+# A starting configuration for a deployed service: three public repositories to watch
 # while you try it out. Copy it to where PRFLAGGER_CONFIG points (DEPLOY.md, step 3)
 # and change the [[repos]] list to your own. DEPLOY.md, "Choosing repositories to
 # watch", explains why these, and how to add a practice fork.
@@ -10,9 +10,9 @@
 # No credential belongs in this file. Tokens and keys come from the environment only
 # (deploy/.env.example lists them).
 
-# Both repositories below were run end to end before this file was written: a real
-# open pull request each, base and head suites in the offline sandbox. DEPLOY.md has
-# the numbers.
+# Each repository below was run end to end before this file was written: a real open
+# pull request each, base and head suites in the offline sandbox. DEPLOY.md has the
+# numbers.
 
 # The reference target. Its maintainers review closely, which gives the mined review
 # standards real material.
@@ -29,6 +29,11 @@ max_prs = 10
 [[repos]]
 slug = "python-attrs/attrs"
 package_roots = ["src/attr", "src/attrs"]
+max_prs = 5
+
+# A busy, popular library whose test dependencies are declared through Poetry.
+[[repos]]
+slug = "Textualize/rich"
 max_prs = 5
 
 # Your own fork of pallets/click: the one place you know what each pull request should

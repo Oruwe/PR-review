@@ -148,7 +148,9 @@ def test_the_example_config_is_a_complete_service_config() -> None:
     example = DEPLOY / "config.example.toml"
     assert "[target]" not in example.read_text()
     loaded = load(example)
-    assert [r.slug for r in loaded.repos] == ["pallets/click", "python-attrs/attrs"]
+    assert [r.slug for r in loaded.repos] == [
+        "pallets/click", "python-attrs/attrs", "Textualize/rich"
+    ]
     assert all(r.max_prs <= 25 for r in loaded.repos), "the first poll queues every PR"
     click = loaded.repos[0]
     assert click.package_roots == ("src/click",)

@@ -167,21 +167,28 @@ It is most useful where three things hold:
 - **A test suite that runs offline in minutes.** Sandboxes have no network, and every
   pull request runs the suite twice, at the commit it branched from and at its head.
   Test-only dependencies are installed from `test`/`tests`/`dev` extras, PEP 735
-  dependency groups, or requirements files. Poetry's `dev-dependencies` are not yet.
+  dependency groups, Poetry's test or dev group, or requirements files.
 - **Pull requests that maintainers review closely.** Mined standards come from review
   comments that were acted on before a merge.
 
-`deploy/config.example.toml` starts with two that meet them. Each was run end to end on
-a real open pull request before being recommended:
+`deploy/config.example.toml` starts with three that meet them. Each was run end to end
+on a real open pull request before being recommended:
 
 | | Suite in the sandbox (base / head) | Peak memory | Result |
 |---|---|---|---|
 | `pallets/click` #3859 | 2,084 tests, 8 s each | 131 MB | no findings: the pull request only adds type-checker configuration |
 | `python-attrs/attrs` #1626 | 1,412 / 1,414 tests, 28 s each | 260 MB | two new mypy errors at head |
+| `Textualize/rich` #4184 | 981 tests, 12 s each | 73 MB | new ruff and mypy diagnostics: the pull request moves rich from Poetry to uv and changes its lint configuration |
 
-Four of attrs' packaging tests fail at every commit, because the sandbox imports attrs
-from the checkout rather than from an installed distribution. They fail the same way on
-both sides, so they produce no findings. A run's first image build adds about a minute.
+Some tests fail at every commit, for reasons outside the pull request. They fail the same
+way on both sides, so they produce no findings:
+
+- four of attrs' packaging tests, because the sandbox imports attrs from the checkout
+  rather than from an installed distribution;
+- eight of rich's syntax-highlighting tests, because the sandbox installs a newer
+  Pygments, which colours code differently.
+
+A run's first image build adds about a minute.
 
 **Add a repository where you know the answer.** Fork `pallets/click`, open small pull
 requests inside your fork, and uncomment the fork's entry in the config. Good ones to try:
