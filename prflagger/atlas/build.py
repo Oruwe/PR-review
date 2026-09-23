@@ -11,8 +11,10 @@ only the checkout and `git`.
 
 from __future__ import annotations
 
+import os
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -41,13 +43,35 @@ def build_atlas(
     toolchain: Toolchain,
     package_roots: tuple[str, ...] = (),
     churn_days: int = 365,
+    max_files: int = 25_000,
+    on_structure: Callable[[dict[str, Symbol], dict[str, set[str]]], None] | None = None,
 ) -> dict[str, Any]:
-    """Everything the Atlas view needs, as JSON-ready data."""
+    """Everything the Atlas view needs, as JSON-ready data.
+
+    `on_structure` receives the symbol index and call graph before they are
+    aggregated away, so a caller can persist them without paying to compute them
+    twice. `max_files` bounds the symbol pass: past it the repository still gets
+    sizes, churn and topology, and `analysis_depth` says the structural layer was
+    skipped rather than the view implying a depth it never reached.
+    """
     started = time.monotonic()
     files = inventory(repo_path, test_globs=toolchain.test_globs)
     churn = churn_by_path(repo_path, days=churn_days)
 
-    symbols, call_edges = _structure(repo_path, toolchain, package_roots)
+    skipped_reason = ""
+    source_files = sum(1 for f in files if f.language not in ("Markdown", "Config", "Other"))
+    if source_files > max_files:
+        symbols: dict[str, Symbol] = {}
+        call_edges: dict[str, set[str]] = {}
+        skipped_reason = (
+            f"{source_files:,} source files exceeds the {max_files:,}-file budget for "
+            f"symbol extraction; sizes, churn and test topology are still measured"
+        )
+        log.warning("atlas.structure_skipped", repo=slug, files=source_files)
+    else:
+        symbols, call_edges = _structure(repo_path, toolchain, package_roots)
+        if on_structure is not None and symbols:
+            on_structure(symbols, call_edges)
     modules = _modules(files, churn, symbols)
     edges = _module_edges(call_edges, symbols)
     test_map = _test_topology(files, modules)
@@ -79,6 +103,7 @@ def build_atlas(
         "surface": _surface(symbols),
         "test_topology": test_map,
         "analysis_depth": "structural" if symbols else "surface",
+        "depth_note": skipped_reason,
     }
     log.info(
         "atlas.built", repo=slug, sha=sha[:12], modules=len(modules),
@@ -109,23 +134,40 @@ def _structure(
     if not roots:
         roots = _infer_roots(repo_path)
 
+    # One analysis root, not one per package. Resolving a call means finding the
+    # callee among the indexed symbols, so a graph built separately per package
+    # can never see an edge that crosses packages — which on a repository with
+    # forty top-level packages is every edge worth drawing.
+    root = _common_root(roots, repo_path)
     symbols: dict[str, Symbol] = {}
     edges: dict[str, set[str]] = {}
-    for root in roots:
-        try:
-            # Repo-relative, or module attribution falls into a `/tmp/...` bucket
-            # and every real module reports zero symbols.
-            symbols.update(
-                {
-                    fqn: replace(symbol, file=_relative(symbol.file, repo_path))
-                    for fqn, symbol in index_symbols(root).items()
-                }
-            )
-            for caller, callees in build_call_graph(root).items():
-                edges.setdefault(caller, set()).update(callees)
-        except (OSError, RecursionError, ValueError) as error:
-            log.warning("atlas.structure_failed", root=str(root), error=str(error)[:200])
+    try:
+        # Repo-relative, or module attribution falls into a `/tmp/...` bucket and
+        # every real module reports zero symbols.
+        symbols = {
+            fqn: replace(symbol, file=_relative(symbol.file, repo_path))
+            for fqn, symbol in index_symbols(root).items()
+        }
+        edges = build_call_graph(root)
+    except (OSError, RecursionError, ValueError) as error:
+        log.warning("atlas.structure_failed", root=str(root), error=str(error)[:200])
     return symbols, edges
+
+
+def _common_root(roots: list[Path], repo_path: Path) -> Path:
+    """The shallowest directory containing every package root.
+
+    A single root keeps fully-qualified names consistent across packages, which
+    is what lets a cross-package call resolve at all.
+    """
+    if len(roots) == 1:
+        return roots[0]
+    try:
+        common = Path(os.path.commonpath([str(r) for r in roots]))
+    except ValueError:
+        return repo_path
+    # Never climb above the repository itself.
+    return common if common.is_relative_to(repo_path) or common == repo_path else repo_path
 
 
 def _relative(path: str, repo_path: Path) -> str:

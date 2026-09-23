@@ -25,6 +25,7 @@ import structlog
 from prflagger.core.config import Config, cache_root
 from prflagger.core.errors import ImageBuildError
 from prflagger.core.models import Job, Outcome, TestResult
+from prflagger.engine.janitor import MIN_FREE_RATIO, disk_free_ratio
 from prflagger.lang.base import Toolchain, parse_tests
 from prflagger.sandbox.images import build_image, image_key_for
 from prflagger.sandbox.stream import run_streaming
@@ -139,6 +140,23 @@ class SandboxPool:
         async with self._semaphore:
             if spec.run_id in self._cancelled:
                 return _result(Outcome.FAILED, stderr="run cancelled before this job started")
+
+            free = disk_free_ratio()
+            if free < MIN_FREE_RATIO:
+                # Starting here would fail partway with a confusing error. Say
+                # what is actually wrong instead.
+                message = (
+                    f"refusing to start: only {free * 100:.1f}% of the disk is free "
+                    f"(minimum {MIN_FREE_RATIO * 100:.0f}%). Run `prflagger gc`."
+                )
+                log.error("sandbox.disk_exhausted", free_ratio=round(free, 4))
+                self._bus.emit(
+                    "job.finished", run_id=spec.run_id, job_id=spec.job_id,
+                    stage=spec.stage, outcome=Outcome.INSTALL_FAILED.value,
+                    tests=0, duration_s=0.0, error=message,
+                )
+                return _result(Outcome.INSTALL_FAILED, stderr=message)
+
             return await self._execute(spec, job, image_key)
 
     async def _execute(self, spec: JobSpec, job: Job, image_key: str) -> TestResult:

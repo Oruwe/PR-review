@@ -75,8 +75,11 @@ def main(argv: list[str] | None = None) -> int:
     watch = sub.add_parser("watch", help="start watching a repository")
     watch.add_argument("--repo", required=True, help="owner/name")
 
-    collect = sub.add_parser("gc", help="drop old events and unreferenced cache entries")
-    collect.add_argument("--days", type=int, default=0, help="keep this many days of events")
+    collect = sub.add_parser("gc", help="reclaim worktrees, images, transcripts and events")
+    collect.add_argument("--days", type=int, default=0, help="keep this many days")
+    collect.add_argument(
+        "--dry-run", action="store_true", help="report what would go, remove nothing"
+    )
 
     args = parser.parse_args(argv)
     _configure_logging()
@@ -90,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "watch":
         return _watch(args.repo)
     if args.command == "gc":
-        return _gc(args.days)
+        return _gc(args.days, dry_run=args.dry_run)
     return _norms(args.repo)
 
 
@@ -162,29 +165,28 @@ def _watch(slug: str) -> int:
     return 0
 
 
-def _gc(days: int) -> int:
-    """Drop old events and cached job results. Disk is finite."""
-    import shutil
-
+def _gc(days: int, *, dry_run: bool = False) -> int:
+    """Reclaim disk. Worktrees, images, transcripts and cached job results."""
     from prflagger.api.service import Service
+    from prflagger.engine.janitor import disk_free_ratio, sweep
 
     service = Service.build()
-    retention = days or service.config.server.event_retention_days
-    removed = service.bus.prune(retention)
-    print(f"events pruned: {removed} (kept {retention} days)")
+    before = disk_free_ratio()
+    reclaimed = sweep(
+        service.store, service.config, service.bus,
+        keep_days=days or None, dry_run=dry_run,
+    )
+    if not dry_run:
+        service.db.execute("VACUUM")
 
-    root = cache_root()
-    freed = 0
-    live = {run.id for run in service.store.runs(limit=10_000)}
-    transcripts = root / "runs"
-    if transcripts.is_dir():
-        for directory in transcripts.iterdir():
-            if directory.is_dir() and directory.name not in live:
-                freed += sum(f.stat().st_size for f in directory.rglob("*") if f.is_file())
-                shutil.rmtree(directory, ignore_errors=True)
-    print(f"orphaned transcripts removed: {freed // 1024} KB")
-    service.db.execute("VACUUM")
-    print("database vacuumed")
+    print(f"worktrees removed   : {reclaimed.worktrees}")
+    print(f"images removed      : {reclaimed.images}")
+    print(f"transcripts removed : {reclaimed.transcripts}")
+    print(f"events pruned       : {reclaimed.events}")
+    print(f"reclaimed           : {reclaimed.bytes_freed / (1024 * 1024):.1f} MB")
+    print(f"disk free           : {before * 100:.1f}% -> {disk_free_ratio() * 100:.1f}%")
+    for failure in reclaimed.failures:
+        print(f"  could not remove: {failure}", file=sys.stderr)
     return 0
 
 

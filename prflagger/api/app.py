@@ -223,9 +223,15 @@ def create_app(
         toolchain = await asyncio.to_thread(
             for_repo, tree, config=built.config, slug=slug
         )
+        def persist(symbols: dict[str, Any], edges: dict[str, set[str]]) -> None:
+            # Ranking reads caller counts from here; without this step centrality
+            # is a constant and the ordering ignores how connected a symbol is.
+            built.store.put_symbols(slug, list(symbols.values()))
+            built.store.put_call_edges(slug, edges)
+
         atlas = await asyncio.to_thread(
             build_atlas, tree, slug=slug, sha=sha, toolchain=toolchain,
-            package_roots=tuple(entry.package_roots),
+            package_roots=tuple(entry.package_roots), on_structure=persist,
         )
         built.store.put_atlas(slug, sha, atlas)
         built.bus.emit("atlas.built", repo=slug, sha=sha, modules=len(atlas["modules"]))

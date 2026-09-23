@@ -8,12 +8,14 @@ set of components that each open their own connection and disagree about state.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 
 import structlog
 
 from prflagger.core.config import Config, load
+from prflagger.engine.janitor import disk_free_ratio, sweep
 from prflagger.engine.recovery import recover
 from prflagger.engine.scheduler import Scheduler
 from prflagger.engine.watcher import Watcher
@@ -43,6 +45,7 @@ class Service:
     watcher: Watcher
     github: GitHub
     started: bool = False
+    janitor: asyncio.Task[None] | None = None
 
     @classmethod
     def build(cls, config: Config | None = None, *, db_path: Path | None = None) -> Service:
@@ -67,11 +70,27 @@ class Service:
         await recover(self.store, self.bus, self.scheduler)
         if watch:
             await self.watcher.start()
+        self.janitor = asyncio.create_task(self._sweep_periodically(), name="pf-janitor")
         self.started = True
         self.bus.emit("service.started", workers=self.pool.capacity, watching=watch)
         log.info("service.started", workers=self.pool.capacity, watching=watch)
 
+    async def _sweep_periodically(self, every_s: float = 3600.0) -> None:
+        """Reclaim disk hourly. A service that never tidies fills the disk."""
+        while True:
+            await asyncio.sleep(every_s)
+            try:
+                await asyncio.to_thread(sweep, self.store, self.config, self.bus)
+            except asyncio.CancelledError:
+                return
+            except Exception:  # noqa: BLE001 - a failed sweep must not stop the service
+                log.exception("janitor.failed")
+
     async def stop(self) -> None:
+        if self.janitor is not None:
+            self.janitor.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self.janitor
         await self.watcher.stop()
         await self.scheduler.stop()
         self.started = False
@@ -88,4 +107,5 @@ class Service:
             "github_authenticated": self.github.authenticated,
             "github_rate_remaining": self.github.remaining,
             "last_poll_at": self.watcher.last_poll_at,
+            "disk_free_ratio": round(disk_free_ratio(), 4),
         }

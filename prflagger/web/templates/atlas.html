@@ -62,9 +62,11 @@
 {% if atlas.analysis_depth != "structural" %}
 <div class="notice warning" style="margin-bottom:16px">
   <span class="ico" aria-hidden="true">⚠</span>
-  <div><strong>Surface depth only.</strong> There is no exact symbol extractor for
-    {{ atlas.toolchain.display }} yet, so sizes, churn and test topology below are measured
-    but the call graph and public surface are not. This is stated rather than implied.</div>
+  <div><strong>Surface depth only.</strong>
+    {% if atlas.depth_note %}{{ atlas.depth_note }}.{% else %}There is no exact symbol
+    extractor for {{ atlas.toolchain.display }} yet, so sizes, churn and test topology
+    below are measured but the call graph and public surface are not.{% endif %}
+    This is stated rather than implied.</div>
 </div>
 {% endif %}
 
