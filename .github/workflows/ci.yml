@@ -64,6 +64,7 @@ jobs:
             tests/test_models.py tests/test_v2_storage.py tests/test_v2_lang.py \
             tests/test_v2_api.py tests/test_v2_scheduler.py tests/test_v2_janitor.py \
             tests/test_v2_charter.py tests/test_v2_brain.py \
+            tests/test_v2_llm.py tests/test_v2_adjudicate.py \
             tests/test_brain.py \
             tests/test_analysis.py tests/test_privacy.py tests/test_gitsafety.py
 

@@ -46,8 +46,30 @@ total_usd = 100.0
 per_run_usd = 0.25
 per_repo_daily_usd = 2.00
 
+# The model that reads findings against each repository and suggests changes.
+# Credentials come from the environment only — AWS_BEARER_TOKEN_BEDROCK (a Bedrock
+# API key) or an AWS access key / profile / instance role. Verify with:
+#     python -m prflagger.cli llm check
 [models]
-light = "anthropic.claude-haiku-4-5"   # extraction, classification, norm naming
-heavy = "anthropic.claude-sonnet-5"    # adjudication, test generation
+enabled = "auto"                       # "auto": use a model when credentials exist; "off": never
+light = "anthropic.claude-haiku-4-5"   # naming mined review standards
+heavy = "anthropic.claude-sonnet-5"    # adjudication and suggestions
 region = "us-east-1"
-cache_ttl = "1h"
+cache_ttl = "1h"                       # the repository context is a cached prompt prefix
+max_adjudications = 8                  # file groups read per run, highest-ranked first
+
+# USD per million tokens, [input, output]. A model with no price is refused, because a
+# budget cannot be enforced on an unknown price. Check current Bedrock pricing.
+[models.prices]
+"anthropic.claude-haiku-4-5" = [1.0, 5.0]
+"anthropic.claude-sonnet-5" = [3.0, 15.0]
+
+# What each repository's reviewers have enforced, read from merged pull requests.
+# A GitHub token (GITHUB_TOKEN) raises the harvest from 15 pull requests to the limits
+# below; without one GitHub allows only 60 requests an hour.
+[brain]
+harvest_limit = 200       # closed pull requests examined on a repository's first read
+incremental_limit = 100   # per daily refresh after that
+refresh_hours = 24
+min_support = 3           # comments behind a mined standard
+min_reviewers = 2         # distinct reviewers behind it

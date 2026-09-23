@@ -288,3 +288,116 @@ def test_the_pipeline_finds_the_undeclared_change(
     # The behaviour change matters because the repository has a test suite, and the
     # finding says so by pointing at the declared standard, not at an opinion.
     assert behaviour[0].norm_id == "declared-tests"
+
+
+# ----------------------------------------------------------------------------------
+# The whole pipeline, with a model reading the findings against the repository
+# ----------------------------------------------------------------------------------
+
+
+def _pipeline_with_model(tmp_path: Path, respond: object) -> dict[str, object]:
+    """Run the fixture PR end to end with the scripted model at the network boundary."""
+    from prflagger.core.config import ModelConfig
+    from prflagger.llm.client import build_client
+    from prflagger.llm.provider import bedrock_mantle
+    from tests.model_fixture import RecordedModel, serve
+
+    repo, base, head = build_repo(tmp_path / "repo")
+    model = RecordedModel(respond)  # type: ignore[arg-type]
+
+    async def scenario() -> dict[str, object]:
+        config = Config(
+            repos=(RepoConfig(slug="demo/shoplib", clone_url=str(repo),
+                              package_roots=("shoplib",)),),
+            sandbox=SandboxConfig(default_timeout_s=180, default_memory_mb=512),
+            models=ModelConfig(),
+        )
+        database = Database(tmp_path / "test.db")
+        store = Store(database)
+        bus = EventBus(database)
+        bus.bind_loop(asyncio.get_running_loop())
+        store.put_repo(Repo(slug="demo/shoplib", package_roots=("shoplib",),
+                            added_at=time.time()))
+        client = build_client(
+            config, database,
+            provider=bedrock_mantle("us-east-1", base_url=model.base_url, skip_auth=True),
+        )
+        worker = RunWorker(config, store, bus, SandboxPool(config, bus), models=client)
+        scheduler = Scheduler(config, store, bus, worker)
+        await scheduler.start(workers=1)
+        pull = PullRequest(
+            repo="demo/shoplib", number=1, title="fix: validate the discount percentage",
+            body="Rejects a negative percent instead of silently ignoring it.",
+            author="demo", base_sha=base, head_sha=head, state="open", updated_at="now",
+        )
+        store.put_pull(pull)
+        identifier = scheduler.submit(pull, force=True)
+        assert identifier is not None
+        deadline = time.monotonic() + 600
+        while time.monotonic() < deadline:
+            run = store.run(identifier)
+            if run and run.state in (RunState.DONE, RunState.FAILED, RunState.CANCELLED):
+                break
+            await asyncio.sleep(1)
+        await scheduler.stop()
+        coverage: dict = {}
+        states = []
+        for event in bus.since(0, run_id=identifier):
+            if event.type == "run.observations":
+                coverage = event.payload.get("coverage", {})
+            if event.type == "run.state":
+                states.append(event.payload.get("state"))
+        return {
+            "run": store.run(identifier), "observations": store.observations(identifier),
+            "adjudications": store.adjudications(identifier),
+            "suggestions": store.suggestions(identifier), "coverage": coverage,
+            "states": states, "spent": client.ledger.spent(run_id=identifier),
+        }
+
+    with serve(model):
+        result = asyncio.run(scenario())
+    result["requests"] = model.requests
+    return result
+
+
+@needs_docker
+def test_findings_are_read_against_the_repository_and_every_citation_checks_out(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.adjudication_fixture import honest
+
+    monkeypatch.setenv("PRFLAGGER_CACHE_DIR", str(tmp_path / "cache"))
+    result = _pipeline_with_model(tmp_path, honest)
+    run = result["run"]
+    assert run is not None and run.state is RunState.DONE, run  # type: ignore[union-attr]
+    assert "adjudicating" in result["states"]  # type: ignore[operator]
+
+    adjudications = result["adjudications"]
+    assert adjudications, "the findings were read against the repository"
+    for adjudication in adjudications.values():  # type: ignore[union-attr]
+        assert adjudication.citations, "an uncited adjudication cannot exist"
+        assert adjudication.model == "anthropic.claude-sonnet-5"
+    assert result["suggestions"], "a cited suggestion was kept"
+
+    verified = result["coverage"]["verified"]  # type: ignore[index]
+    assert any("every citation checked" in entry for entry in verified)
+    assert result["spent"] > 0 and run.usd_spent > 0  # type: ignore[union-attr, operator]
+    assert all(r["system"][0]["cache_control"] for r in result["requests"])  # type: ignore[union-attr]
+
+
+@needs_docker
+def test_a_model_that_fabricates_changes_nothing_but_the_coverage_statement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.adjudication_fixture import fabricating
+
+    monkeypatch.setenv("PRFLAGGER_CACHE_DIR", str(tmp_path / "cache"))
+    result = _pipeline_with_model(tmp_path, fabricating)
+    assert result["run"].state is RunState.DONE  # type: ignore[union-attr]
+    assert result["adjudications"] == {} and result["suggestions"] == {}
+    observations = result["observations"]
+    assert any(o.kind == "behavior_change" for o in observations), (  # type: ignore[union-attr]
+        "the probes' findings stand on their own evidence"
+    )
+    skipped = result["coverage"]["skipped"]  # type: ignore[index]
+    assert any("could be checked" in entry["why"] for entry in skipped)

@@ -6,6 +6,7 @@
     prflagger check --repo <path> --base <sha> --head <sha> --out report.html
     prflagger norms --repo <slug>
     prflagger gc [--days N]
+    prflagger llm check [--model ID]
 
 This module is the only place that prints.
 """
@@ -81,6 +82,13 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run", action="store_true", help="report what would go, remove nothing"
     )
 
+    llm = sub.add_parser("llm", help="the model provider")
+    llm_sub = llm.add_subparsers(dest="llm_command", required=True)
+    llm_check = llm_sub.add_parser(
+        "check", help="make one tiny real call to prove credentials, region and model work"
+    )
+    llm_check.add_argument("--model", default="", help="model id (default: [models] light)")
+
     args = parser.parse_args(argv)
     _configure_logging()
 
@@ -94,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
         return _watch(args.repo)
     if args.command == "gc":
         return _gc(args.days, dry_run=args.dry_run)
+    if args.command == "llm":
+        return _llm_check(args.model)
     return _norms(args.repo)
 
 
@@ -162,6 +172,50 @@ def _watch(slug: str) -> int:
         )
     )
     print(f"watching {slug} (default branch {branch})")
+    return 0
+
+
+def _llm_check(model: str) -> int:
+    """One real call, uncached, through the same client and ledger the service uses."""
+    from prflagger.core.config import load
+    from prflagger.llm.client import build_client
+    from prflagger.llm.ledger import BudgetExceeded
+    from prflagger.llm.provider import Request
+    from prflagger.storage.db import connect
+
+    config = load()
+    client = build_client(config, connect())
+    chosen = model or config.models.light
+    spent = client.ledger.spent()
+    print(f"credentials : {client.credentials or 'none'}")
+    print(f"region      : {config.models.region}")
+    print(f"models      : light={config.models.light}  heavy={config.models.heavy}")
+    print(f"budget      : ${spent:.4f} spent of ${config.budget.total_usd:.2f}"
+          f" (per run ${config.budget.per_run_usd:.2f},"
+          f" per repo per day ${config.budget.per_repo_daily_usd:.2f})")
+    if not client.available:
+        print(f"unavailable : {client.unavailable_reason}")
+        return 1
+    started = time.monotonic()
+    try:
+        answer = client.ask(
+            Request(model=chosen, prompt="Reply with the single word: ready", max_tokens=8),
+            stage="check", use_cache=False,
+        )
+    except BudgetExceeded as error:
+        print(f"refused     : {error}")
+        return 1
+    except Exception as error:  # noqa: BLE001 - the point is to show what went wrong
+        print(f"failed      : {type(error).__name__}: {str(error)[:300]}")
+        if client.unavailable_reason:
+            print(f"now         : {client.unavailable_reason}")
+        return 1
+    usage = answer.completion
+    print(f"reply       : {answer.text.strip()!r} from {chosen}"
+          f" in {time.monotonic() - started:.1f}s")
+    print(f"usage       : {usage.input_tokens} in, {usage.output_tokens} out"
+          f" — ${answer.usd:.6f}, recorded in the ledger")
+    print("ready       : adjudication and norm naming will use this provider")
     return 0
 
 

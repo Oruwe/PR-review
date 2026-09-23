@@ -9,7 +9,9 @@ that stops starting.
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
+import re
 import time
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -394,7 +396,8 @@ def create_app(
 
     @app.get("/api/budget")
     async def budget() -> Any:
-        spent = float(built.db.scalar("SELECT SUM(usd) FROM llm_spend", default=0.0) or 0.0)
+        ledger = built.models.ledger
+        spent = ledger.spent()
         caps = built.config.budget
         return {
             "spent_usd": round(spent, 4),
@@ -402,7 +405,10 @@ def create_app(
             "remaining_usd": round(max(0.0, caps.total_usd - spent), 4),
             "per_run_usd": caps.per_run_usd,
             "per_repo_daily_usd": caps.per_repo_daily_usd,
-            "calls": int(built.db.scalar("SELECT COUNT(*) FROM llm_spend", default=0) or 0),
+            "today_usd": round(ledger.spent(since=ledger.day_start()), 4),
+            "models_available": built.models.available,
+            "models_unavailable_reason": built.models.unavailable_reason,
+            **ledger.summary(),
         }
 
     # -- sockets --------------------------------------------------------------
@@ -473,6 +479,33 @@ def _queue_rows(service: Service, slug: str) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: (-r["risk"], -r["findings"], -r["number"]))
 
 
+_CODE_REF = re.compile(r"^(?:(base|head):)?(.+?):(\d+)(?:-(\d+))?$")
+
+
+def _citation_view(
+    citation: Any, *, slug: str, base_sha: str, head_sha: str, pr: int,
+    on_github: bool, norms: dict[str, Norm],
+) -> dict[str, Any]:
+    """A citation as the report shows it: what it says, and where to check it."""
+    view = {"type": citation.type, "ref": citation.ref, "quote": citation.quote,
+            "url": "", "label": ""}
+    if citation.type == "norm":
+        norm = norms.get(citation.ref)
+        view["label"] = norm.statement if norm else ""
+        anchor = f"norm-{citation.ref}" if norm and norm.source == "mined" else "norms"
+        view["url"] = f"/repo/{slug}#{anchor}"
+    elif citation.type == "code" and on_github:
+        match = _CODE_REF.match(citation.ref)
+        if match:
+            side, path, first, last = match.groups()
+            sha = base_sha if side == "base" else head_sha
+            lines = f"L{first}-L{last}" if last else f"L{first}"
+            view["url"] = f"https://github.com/{slug}/blob/{sha}/{path}#{lines}"
+    elif citation.type == "diff" and on_github and pr:
+        view["url"] = f"https://github.com/{slug}/pull/{pr}/files"
+    return view
+
+
 def _norm_dict(norm: Norm) -> dict[str, Any]:
     return {
         "id": norm.id, "statement": norm.statement, "source": norm.source,
@@ -526,6 +559,10 @@ def _report_payload(service: Service, run_id: str) -> dict[str, Any]:
             }
 
     norms = {n.id: n for n in service.store.norms(run.repo)}
+    cite = functools.partial(
+        _citation_view, slug=run.repo, base_sha=run.base_sha, head_sha=run.head_sha,
+        pr=run.pr_number, on_github=service.brain.on_github(run.repo), norms=norms,
+    )
     findings = []
     for observation in observations:
         adjudication = adjudications.get(observation.id)
@@ -550,7 +587,7 @@ def _report_payload(service: Service, run_id: str) -> dict[str, Any]:
                     {
                         "assessment": adjudication.assessment,
                         "reasoning": adjudication.reasoning,
-                        "citations": [c.__dict__ for c in adjudication.citations],
+                        "citations": [cite(c) for c in adjudication.citations],
                         "model": adjudication.model,
                     }
                     if adjudication
@@ -562,7 +599,7 @@ def _report_payload(service: Service, run_id: str) -> dict[str, Any]:
                         "rationale": suggestion.rationale,
                         "patch_sketch": suggestion.patch_sketch,
                         "confidence": suggestion.confidence,
-                        "citations": [c.__dict__ for c in suggestion.citations],
+                        "citations": [cite(c) for c in suggestion.citations],
                     }
                     if suggestion
                     else None

@@ -177,14 +177,18 @@ def test_check_in_process_writes_a_report(
 def test_brain_build_falls_back_to_a_declarative_profile(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """With no gh on PATH the brain still builds, and says what it could not mine."""
-    from prflagger.brain import harvest as harvest_module
+    """When GitHub refuses the harvest the brain still builds, and says what it could
+    not mine. The refusal is a real HTTP 403 from a local server standing in for the API."""
     from prflagger.cli import main
+    from tests.github_fixture import RecordedGitHub, serve
 
     monkeypatch.setenv("PRFLAGGER_CACHE_DIR", str(tmp_path))
-    monkeypatch.setattr(harvest_module.shutil, "which", lambda _: None)
-
-    assert main(["brain", "build", "--repo", "pallets/click"]) == 0
+    refusing = RecordedGitHub(
+        statuses={"/repos/pallets/click/pulls": (403, "API rate limit exceeded")}
+    )
+    with serve(refusing):
+        monkeypatch.setenv("PRFLAGGER_GITHUB_API", refusing.base_url)
+        assert main(["brain", "build", "--repo", "pallets/click"]) == 0
 
     captured = capsys.readouterr()
     assert "harvest unavailable" in captured.err

@@ -369,3 +369,50 @@ def test_the_standards_a_repository_holds_are_shown_with_their_evidence(
     by_kind = {f["kind"]: f for f in report["findings"]}
     assert by_kind["lint_regression"]["norm"]["statement"].startswith("Code must pass")
     assert "own ruff" in client.get(f"/runs/{run_id}/report").text
+
+
+def test_a_citation_is_shown_where_it_can_be_checked(
+    client: TestClient, service: Service
+) -> None:
+    from prflagger.core.models import Adjudication, Citation, Suggestion
+
+    run_id = _seed(service)
+    cited = (
+        Citation("norm", "declared-lint-ruff"),
+        Citation("code", "lib/x.py:3", "import os"),
+    )
+    service.store.put_adjudication(Adjudication(
+        observation_id="rAPI-o2", assessment="diverges_from_repo",
+        reasoning="The repository configures ruff and keeps imports clean.",
+        citations=cited, model="anthropic.claude-sonnet-5", usd=0.004,
+    ))
+    service.store.put_suggestion(Suggestion(
+        observation_id="rAPI-o2", summary="Remove the unused import.",
+        rationale="ruff F401 is enabled by the repository's own configuration.",
+        patch_sketch="-import os", confidence=0.8, citations=cited[1:],
+    ))
+    report = client.get(f"/api/runs/{run_id}/report").json()
+    lint = next(f for f in report["findings"] if f["id"] == "rAPI-o2")
+    norm_view, code_view = lint["adjudication"]["citations"]
+    assert norm_view["url"] == "/repo/demo/lib#norms"
+    assert code_view["url"] == "", "demo/lib is not on GitHub, so there is nothing to link"
+    assert code_view["quote"] == "import os"
+
+    html = client.get(f"/runs/{run_id}/report").text
+    assert "read by anthropic.claude-sonnet-5" in html
+    assert "Remove the unused import." in html and "80% confidence" in html
+    assert 'class="cite-quote">import os<' in html, "quotes are visible, not only on hover"
+
+
+def test_citations_on_a_github_repository_link_to_the_exact_lines() -> None:
+    from prflagger.api.app import _citation_view
+    from prflagger.core.models import Citation
+
+    view = _citation_view(
+        Citation("code", "base:src/pkg/core.py:10-14"), slug="acme/lib", base_sha="b" * 40,
+        head_sha="h" * 40, pr=7, on_github=True, norms={},
+    )
+    assert view["url"] == f"https://github.com/acme/lib/blob/{'b' * 40}/src/pkg/core.py#L10-L14"
+    diff = _citation_view(Citation("diff", "src/pkg/core.py"), slug="acme/lib",
+                          base_sha="", head_sha="", pr=7, on_github=True, norms={})
+    assert diff["url"] == "https://github.com/acme/lib/pull/7/files"

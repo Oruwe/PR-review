@@ -22,6 +22,9 @@ from typing import Any
 
 import structlog
 
+from prflagger.adjudicate.adjudicate import adjudicate
+from prflagger.adjudicate.citations import Evidence
+from prflagger.adjudicate.situate import changed_paths, group, repo_context
 from prflagger.brain.declared import declared_norms, norm_for_tool
 from prflagger.charter.drift import compare, evidence_lines, headline
 from prflagger.charter.extract import extract_charter
@@ -29,18 +32,21 @@ from prflagger.charter.relevance import WEIGHT, grounded
 from prflagger.core.config import Config
 from prflagger.core.ids import job_id
 from prflagger.core.models import (
+    Adjudication,
     Charter,
     CharterDrift,
     Observation,
     Outcome,
     Run,
     RunState,
+    Suggestion,
     TestResult,
 )
 from prflagger.engine.notify import Notifier
 from prflagger.engine.states import can_transition, progress_of
 from prflagger.lang.base import Toolchain
 from prflagger.lang.detect import for_repo
+from prflagger.llm.client import ModelClient
 from prflagger.probes.differential import differential_observations, outcome_observations
 from prflagger.probes.surface import lint_observations, public_index, surface_observations
 from prflagger.sandbox.pool import JobSpec, SandboxPool
@@ -88,12 +94,15 @@ class RunWorker:
         bus: EventBus,
         pool: SandboxPool,
         notifier: Notifier | None = None,
+        *,
+        models: ModelClient | None = None,
     ) -> None:
         self._config = config
         self._store = store
         self._bus = bus
         self._pool = pool
         self._notifier = notifier
+        self._models = models
 
     # -- state ----------------------------------------------------------------
 
@@ -157,10 +166,22 @@ class RunWorker:
             run, coverage, base, head, base_tree, head_tree, toolchain, entry
         )
 
-        # -- rank and persist ---------------------------------------------------
-        run = self._advance(run, RunState.RENDERING, observations=len(observations))
+        # -- rank, then read each against the repository ------------------------
         ranked = self._rank(run, observations)
+        adjudications: list[Adjudication] = []
+        suggestions: list[Suggestion] = []
+        if ranked:
+            ranked, adjudications, suggestions = await self._adjudicate(
+                run, coverage, ranked, base, head, base_tree, head_tree
+            )
+
+        # -- persist ---------------------------------------------------------------
+        run = self._advance(run, RunState.RENDERING, observations=len(ranked))
         self._store.put_observations(ranked)
+        for adjudication in adjudications:
+            self._store.put_adjudication(adjudication)
+        for suggestion in suggestions:
+            self._store.put_suggestion(suggestion)
         self._bus.emit(
             "run.observations", run_id=run.id, repo=run.repo,
             count=len(ranked),
@@ -285,10 +306,6 @@ class RunWorker:
             self._attach_norms, run, observations, base_tree, toolchain
         )
 
-        coverage.skip(
-            "adjudication against repo norms",
-            "no model provider is configured for this run",
-        )
         return observations
 
     async def _ground(
@@ -339,7 +356,8 @@ class RunWorker:
         observations = grounded(observations, base_charter, repo=run.repo)
         coverage.ok(
             f"judged only against {run.repo}'s own charter at base "
-            f"{run.base_sha[:10]} ({len(base_charter.claims)} cited claims)"
+            f"{run.base_sha[:10]} ({len(base_charter.claims)} cited "
+            f"{'claim' if len(base_charter.claims) == 1 else 'claims'})"
         )
 
         if head_charter is not None:
@@ -439,6 +457,97 @@ class RunWorker:
             run.id, toolchain, usable.get("base", {}), usable.get("head", {})
         )
         return observations, ran, failed
+
+    async def _adjudicate(
+        self,
+        run: Run,
+        coverage: _Verification,
+        ranked: list[Observation],
+        base: TestResult,
+        head: TestResult,
+        base_tree: Path,
+        head_tree: Path,
+    ) -> tuple[list[Observation], list[Adjudication], list[Suggestion]]:
+        """Read the highest-ranked observations against the repository's own
+        charter, norms and code — or say exactly why that did not happen."""
+        what = "adjudication against the repository's charter and norms"
+        models = self._models
+        if models is None or not models.available:
+            coverage.skip(
+                what,
+                models.unavailable_reason if models is not None
+                else "no model provider is configured for this run",
+            )
+            return ranked, [], []
+
+        run = self._advance(run, RunState.ADJUDICATING)
+        limit = self._config.models.max_adjudications
+        packets = await _thread(
+            group, ranked, repo=run.repo, store=self._store, base_tree=base_tree,
+            head_tree=head_tree, base_sha=run.base_sha, head_sha=run.head_sha, limit=limit,
+        )
+        charter = self._store.charter(run.repo)
+        norms = self._store.norms(run.repo)
+        evidence = Evidence(
+            head_tree=head_tree,
+            base_tree=base_tree,
+            norm_ids=frozenset(n.id for n in norms),
+            test_ids=frozenset(base.per_test) | frozenset(head.per_test),
+            changed_paths=frozenset(
+                await _thread(changed_paths, head_tree, run.base_sha, run.head_sha)
+            ),
+            charter_sources={c.source: c.text for c in charter.claims} if charter else {},
+        )
+        outcome = await _thread(
+            adjudicate,
+            run_id=run.id, repo=run.repo, pull=self._store.pull(run.repo, run.pr_number),
+            packets=packets, context=repo_context(run.repo, charter, norms),
+            evidence=evidence, client=models, model=self._config.models.heavy,
+            cache_ttl=self._config.models.cache_ttl,
+        )
+        if outcome.usd:
+            self._store.add_run_usd(run.id, outcome.usd)
+
+        # The adjudicator may demote a finding it shows to be misleading here. It
+        # may never promote one, remove one, or add one.
+        misleading = {
+            a.observation_id for a in outcome.adjudications
+            if a.assessment == "probe_false_positive"
+        }
+        ranked = self._rank(run, [
+            replace(o, confidence=round(o.confidence * 0.5, 4)) if o.id in misleading else o
+            for o in ranked
+        ])
+
+        if outcome.adjudications:
+            coverage.ok(
+                f"{len(outcome.adjudications)} of {len(ranked)} observation(s) read against "
+                f"{run.repo}'s charter and norms by {self._config.models.heavy} "
+                f"({outcome.calls} call(s), {outcome.cached} from cache, "
+                f"${outcome.usd:.4f}); every citation checked"
+            )
+        reasons: dict[str, int] = {}
+        for _, why in outcome.rejected:
+            reasons[why] = reasons.get(why, 0) + 1
+        for why, count in sorted(reasons.items()):
+            coverage.skip(f"{what} for {count} observation(s)", f"discarded: {why}")
+        for key, why in outcome.skipped:
+            coverage.skip(f"{what} for {key}", why)
+        covered = {o.id for packet in packets for o in packet.observations}
+        beyond = [o for o in ranked if o.id not in covered]
+        if beyond:
+            coverage.skip(
+                f"{what} for {len(beyond)} lower-ranked observation(s)",
+                f"at most {limit} file groups are adjudicated per run "
+                "([models] max_adjudications)",
+            )
+        self._bus.emit(
+            "run.adjudicated", run_id=run.id, repo=run.repo,
+            adjudicated=len(outcome.adjudications), suggestions=len(outcome.suggestions),
+            rejected=len(outcome.rejected), skipped=len(outcome.skipped),
+            calls=outcome.calls, cached=outcome.cached, usd=round(outcome.usd, 6),
+        )
+        return ranked, outcome.adjudications, outcome.suggestions
 
     def _attach_norms(
         self, run: Run, observations: list[Observation], base_tree: Path, toolchain: Toolchain

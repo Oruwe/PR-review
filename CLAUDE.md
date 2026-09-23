@@ -26,8 +26,10 @@ python -m prflagger.cli check --repo <path> --base <sha> --head <sha>
   `git`. LLM calls are only for natural language: generating tests, clustering comments.
 - **Never let an LLM decide storage.** Schema is fixed in `models.py`. Extraction fills a
   known shape; it does not invent one.
-- **Every LLM call goes through `prflagger/llm.py`.** It is content-addressed and cached to
-  disk. Never call boto3 bedrock directly — uncached calls blow the budget.
+- **Every LLM call goes through `prflagger.llm`.** The service uses `llm.client.ModelClient`:
+  redacted, content-addressed and cached to disk, reserved against the budget caps before it
+  is sent, priced from the provider's own usage after. Never call Bedrock or the Anthropic
+  SDK directly — an uncached, unmetered call blows the budget.
 - **Sandbox runs return typed outcomes, never raise.** `TIMEOUT` and `OOM` are findings, not
   errors.
 - **The agent never emits a verdict on a pull request.** No "approve", "reject", "looks
@@ -38,6 +40,14 @@ python -m prflagger.cli check --repo <path> --base <sha> --head <sha>
   run's sha, or a nodeid the run actually produced. `Adjudication` and `Suggestion` raise on
   construction when they carry no citation, so no code path can forget to check. An
   adjudicator may demote, annotate or suggest; it can never invent a finding.
+- **A model's claims are checked before they are kept.** `adjudicate.citations.resolve`
+  checks every reference: a norm id the repository has, a `path:line` that exists with the
+  quoted text on it, a test id the run produced, a file the PR changes. The model may
+  annotate, demote or suggest; it may not add, promote, or speak about an observation it was
+  not shown.
+- **Norms come from the repository.** Declared norms cite the config line that sets them;
+  mined norms need three enforced comments from two reviewers and link every one. How a
+  norm was grouped and stated (`clustered_by`, `named_by`) is recorded and shown.
 - **Partial verification is never presented as complete.** Every run carries a coverage
   statement naming what it checked and what it could not, with the reason. A probe that
   failed to run is a gap to report, not a silence.

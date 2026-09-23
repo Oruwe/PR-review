@@ -408,3 +408,14 @@ details.raw pre { background: var(--surface-sunken); border: 1px solid var(--bor
               color: var(--ink-2); font-size: 0.88rem; overflow-wrap: anywhere; }
 .norm-evidence { margin-top: 5px; font-size: 0.8rem; font-family: var(--mono);
                  overflow-wrap: anywhere; }
+
+/* ----------------------------------------------------------- citations ---- */
+
+.cited { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 5px; }
+.cited li { font-size: 0.82rem; overflow-wrap: anywhere; }
+.cited code { font-size: 0.78rem; }
+.cite-type { display: inline-block; min-width: 3.4em; font-size: 0.68rem; font-weight: 700;
+             letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-muted); }
+.cite-quote { margin: 2px 0 0 3.9em; padding-left: 8px; border-left: 2px solid var(--border);
+              font-family: var(--mono); font-size: 0.76rem; color: var(--ink-2);
+              white-space: pre-wrap; }

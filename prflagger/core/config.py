@@ -83,6 +83,22 @@ class ModelConfig:
     region: str = "us-east-1"
     max_tokens: int = 8192
     cache_ttl: str = "1h"
+    #: "auto" uses a model when AWS credentials are present; "off" never does,
+    #: whatever the environment holds; "on" treats missing credentials as an error
+    #: to report on every run rather than a quiet skip.
+    enabled: str = "auto"
+    #: Most symbol groups adjudicated per run, highest-ranked first. The rest are
+    #: named in the coverage statement as not adjudicated.
+    max_adjudications: int = 8
+    #: USD per million tokens: (model id, input, output). A model with no price
+    #: here is refused, because a budget cannot be enforced on an unknown price.
+    #: These defaults are list prices at the time of writing — check current
+    #: Bedrock pricing for your region and override under [models.prices].
+    prices: tuple[tuple[str, float, float], ...] = (
+        ("anthropic.claude-haiku-4-5", 1.0, 5.0),
+        ("anthropic.claude-sonnet-5", 3.0, 15.0),
+        ("anthropic.claude-opus-5", 5.0, 25.0),
+    )
 
 
 @dataclass(frozen=True)
@@ -215,7 +231,15 @@ def _build(cls: type, data: dict[str, Any]) -> Any:
     version should still start an older binary.
     """
     fields = {f.name for f in cls.__dataclass_fields__.values()}  # type: ignore[attr-defined]
-    return cls(**{k: v for k, v in data.items() if k in fields})
+    values = {k: v for k, v in data.items() if k in fields}
+    if cls is ModelConfig and isinstance(values.get("prices"), dict):
+        # [models.prices] "anthropic.x" = [input, output]; merged over the defaults.
+        merged = {model: (inp, out) for model, inp, out in ModelConfig.prices}
+        for model, pair in values["prices"].items():
+            if isinstance(pair, list | tuple) and len(pair) == 2:
+                merged[str(model)] = (float(pair[0]), float(pair[1]))
+        values["prices"] = tuple((m, i, o) for m, (i, o) in sorted(merged.items()))
+    return cls(**values)
 
 
 def load(path: Path | str = "config.toml") -> Config:

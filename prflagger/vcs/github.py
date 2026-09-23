@@ -31,6 +31,8 @@ __all__ = ["GitHub", "GitHubError", "token_from_env"]
 log = structlog.get_logger(__name__)
 
 _API = "https://api.github.com"
+#: GitHub Enterprise Server serves the same REST API at https://<host>/api/v3.
+_API_VAR = "PRFLAGGER_GITHUB_API"
 _TOKEN_VARS = ("GITHUB_TOKEN", "GH_TOKEN", "PRFLAGGER_GITHUB_TOKEN")
 
 
@@ -64,12 +66,12 @@ class GitHub:
         self,
         token: str | None = None,
         *,
-        base_url: str = _API,
+        base_url: str | None = None,
         timeout_s: float = 30.0,
         client: httpx.Client | None = None,
     ) -> None:
         self.token = token if token is not None else token_from_env()
-        self._base = base_url.rstrip("/")
+        self._base = (base_url or os.environ.get(_API_VAR, "").strip() or _API).rstrip("/")
         self._cache: dict[str, _Cached] = {}
         self._client = client or httpx.Client(timeout=timeout_s, follow_redirects=True)
         self.remaining: int | None = None

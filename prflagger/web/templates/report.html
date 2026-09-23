@@ -7,6 +7,18 @@
   <a href="/runs/{{ run.id }}">Run</a>
   <a href="/runs/{{ run.id }}/report" aria-current="page">Report</a>
 {% endblock %}
+{% macro citations(list) %}
+<ul class="cited">
+  {% for c in list %}
+  <li>
+    <span class="cite-type">{{ c.type }}</span>
+    {% if c.url %}<a href="{{ c.url }}" rel="noopener"><code>{{ c.ref }}</code></a>{% else %}<code>{{ c.ref }}</code>{% endif %}
+    {% if c.label %}<span class="subtle">{{ c.label }}</span>{% endif %}
+    {% if c.quote %}<div class="cite-quote">{{ c.quote[:240] }}</div>{% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% endmacro %}
 {% block content %}
 
 <div class="page-head">
@@ -133,20 +145,19 @@
           </div>
         {% endif %}
         {% if f.adjudication %}
-          <strong>{{ f.adjudication.assessment|replace('_',' ') }}</strong>
-          &mdash; {{ f.adjudication.reasoning }}
-          <div style="margin-top:6px">
-            {% for c in f.adjudication.citations %}
-              <span class="citation" title="{{ c.quote }}">{{ c.type }}: {{ c.ref }}</span>
-            {% endfor %}
+          <div{% if f.norm %} style="margin-top:8px"{% endif %}>
+            <strong>{{ f.adjudication.assessment|replace('_',' ') }}</strong>
+            &mdash; {{ f.adjudication.reasoning }}
+            <span class="muted" style="font-size:.76rem"> · read by {{ f.adjudication.model }}</span>
           </div>
+          {{ citations(f.adjudication.citations) }}
         {% elif f.norm %}
         {% elif f.kind == 'behavior_change' %}
           <span class="subtle">Not required. A behaviour change is a fact about the program
             on its own &mdash; no repository standard has to make it matter.</span>
         {% else %}
-          <span class="subtle">Not adjudicated: no model provider was configured for this
-            run, so this observation ships as the mechanical fact it is.</span>
+          <span class="subtle">Not adjudicated &mdash; “What was verified” above says why.
+            It ships as the mechanical fact it is.</span>
         {% endif %}
       </dd>
 
@@ -170,11 +181,9 @@
         {% if f.suggestion.patch_sketch %}
           <pre class="evidence" style="margin-top:8px;white-space:pre">{{ f.suggestion.patch_sketch }}</pre>
         {% endif %}
-        <div style="margin-top:6px">
-          {% for c in f.suggestion.citations %}
-            <span class="citation">{{ c.type }}: {{ c.ref }}</span>
-          {% endfor %}
-        </div>
+        <div class="muted" style="font-size:.78rem;margin-top:6px">
+          Suggested with {{ "%.0f"|format(f.suggestion.confidence * 100) }}% confidence, because of:</div>
+        {{ citations(f.suggestion.citations) }}
       </div>
     </div>
     {% endif %}

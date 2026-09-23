@@ -15,6 +15,7 @@ from pathlib import Path
 import structlog
 
 from prflagger.brain.keeper import BrainKeeper
+from prflagger.brain.naming import model_namer
 from prflagger.charter.keeper import CharterKeeper
 from prflagger.core.config import Config, load
 from prflagger.engine.janitor import disk_free_ratio, sweep
@@ -23,6 +24,8 @@ from prflagger.engine.recovery import recover
 from prflagger.engine.scheduler import Scheduler
 from prflagger.engine.watcher import Watcher
 from prflagger.engine.worker import RunWorker
+from prflagger.llm.client import ModelClient, build_client
+from prflagger.llm.provider import ModelProvider
 from prflagger.sandbox.pool import SandboxPool
 from prflagger.storage.db import Database, connect
 from prflagger.storage.events import EventBus
@@ -50,29 +53,38 @@ class Service:
     notifier: Notifier
     keeper: CharterKeeper
     brain: BrainKeeper
+    models: ModelClient
     started: bool = False
     janitor: asyncio.Task[None] | None = None
     learner: asyncio.Task[None] | None = None
     _background: set[asyncio.Task[object]] = field(default_factory=set)
 
     @classmethod
-    def build(cls, config: Config | None = None, *, db_path: Path | None = None) -> Service:
+    def build(
+        cls,
+        config: Config | None = None,
+        *,
+        db_path: Path | None = None,
+        provider: ModelProvider | None = None,
+    ) -> Service:
+        """`provider` replaces the Bedrock provider at the network boundary, for tests."""
         config = config or load()
         db = connect(db_path)
         store = Store(db)
         bus = EventBus(db)
         pool = SandboxPool(config, bus)
         notifier = Notifier(config, store, bus)
-        worker = RunWorker(config, store, bus, pool, notifier)
+        models = build_client(config, db, provider=provider)
+        worker = RunWorker(config, store, bus, pool, notifier, models=models)
         scheduler = Scheduler(config, store, bus, worker)
         github = GitHub()
         keeper = CharterKeeper(config, store, bus, notifier)
         watcher = Watcher(config, store, bus, scheduler, github, keeper=keeper)
-        brain = BrainKeeper(config, store, bus)
+        brain = BrainKeeper(config, store, bus, namer_factory=model_namer(config, models))
         return cls(
             config=config, db=db, store=store, bus=bus, pool=pool, worker=worker,
             scheduler=scheduler, watcher=watcher, github=github, notifier=notifier,
-            keeper=keeper, brain=brain,
+            keeper=keeper, brain=brain, models=models,
         )
 
     def remember(self, slug: str) -> None:
@@ -165,5 +177,7 @@ class Service:
             "last_poll_at": self.watcher.last_poll_at,
             "disk_free_ratio": round(disk_free_ratio(), 4),
             "open_major": len(self.store.notifications(open_only=True, min_level="major")),
+            "models_available": self.models.available,
+            "models_unavailable_reason": self.models.unavailable_reason,
             "webhook_configured": self.notifier.webhook_configured,
         }

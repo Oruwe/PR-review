@@ -426,6 +426,35 @@ class Store:
             [(repo, caller, callee) for caller, callees in edges.items() for callee in callees],
         )
 
+    def symbol(self, repo: str, fqn: str) -> Symbol | None:
+        r = self.db.one("SELECT * FROM symbols WHERE repo = ? AND fqn = ?", (repo, fqn))
+        if r is None:
+            return None
+        return Symbol(fqn=r["fqn"], kind=r["kind"], file=r["file"],
+                      line_start=r["line_start"], line_end=r["line_end"])
+
+    def callers_of(self, repo: str, fqn: str, limit: int = 5) -> list[Symbol]:
+        """Symbols in this repository that call `fqn`, most specific first."""
+        rows = self.db.query(
+            """
+            SELECT s.* FROM call_edges e
+              JOIN symbols s ON s.repo = e.repo AND s.fqn = e.caller
+             WHERE e.repo = ? AND e.callee = ?
+             ORDER BY s.fqn LIMIT ?
+            """,
+            (repo, fqn, limit),
+        )
+        return [
+            Symbol(fqn=r["fqn"], kind=r["kind"], file=r["file"],
+                   line_start=r["line_start"], line_end=r["line_end"])
+            for r in rows
+        ]
+
+    def add_run_usd(self, run_id: str, usd: float) -> None:
+        self.db.execute(
+            "UPDATE runs SET usd_spent = usd_spent + ? WHERE id = ?", (usd, run_id)
+        )
+
     def caller_counts(self, repo: str) -> dict[str, int]:
         """How many distinct callers each symbol has. Feeds ranking's centrality."""
         return {
