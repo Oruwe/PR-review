@@ -321,6 +321,43 @@ def test_a_suites_declared_test_dependencies_are_installed(
 
 
 @needs_docker
+def test_a_poetry_suites_test_group_is_installed(pool: SandboxPool, tmp_path: Path) -> None:
+    """Poetry keeps the suite's dependencies in its own table, in its own syntax.
+
+    Textualize/rich's main branch declares `attrs = "^21.4.0"` there; pip reads
+    neither the table nor the caret, so its suite stopped at collection.
+    """
+    repo = tmp_path / "versed"
+    (repo / "versed").mkdir(parents=True)
+    (repo / "tests").mkdir()
+    (repo / "pyproject.toml").write_text(
+        '[build-system]\nrequires = ["poetry-core>=1.0.0"]\n'
+        'build-backend = "poetry.core.masonry.api"\n\n'
+        '[tool.poetry]\nname = "versed"\nversion = "0.1.0"\ndescription = "fixture"\n'
+        'authors = ["Fixture <fixture@example.invalid>"]\n'
+        'packages = [{ include = "versed" }]\n\n'
+        '[tool.poetry.dependencies]\npython = "^3.9"\n\n'
+        '[tool.poetry.group.test.dependencies]\nsix = "^1.16"\n'
+    )
+    (repo / "versed" / "__init__.py").write_text("VALUE = 1\n")
+    (repo / "tests" / "test_versed.py").write_text(
+        "import six\n\nfrom versed import VALUE\n\n\n"
+        "def test_the_poetry_group_is_importable():\n    assert six.PY3 and VALUE == 1\n"
+    )
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)  # noqa: S603, S607
+    spec = JobSpec(
+        run_id="rPOETRY", job_id="rPOETRY-base", stage="base_run", repo_path=repo,
+        commit="0" * 40, toolchain=PYTHON, command=PYTHON.test.argv,
+        timeout_s=180, memory_mb=512, package_roots=("versed",),
+    )
+    result = asyncio.run(pool.run(spec))
+    assert result.outcome is Outcome.PASSED, result.stdout[-2000:]
+    assert result.per_test == {
+        "tests/test_versed.py::test_the_poetry_group_is_importable": "passed"
+    }
+
+
+@needs_docker
 def test_the_head_commit_fails_the_test_the_change_broke(
     pool: SandboxPool, tmp_path: Path
 ) -> None:
