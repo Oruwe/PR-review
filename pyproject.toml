@@ -43,7 +43,13 @@ strict = true
 files = ["prflagger"]
 
 [[tool.mypy.overrides]]
-module = ["boto3.*", "botocore.*", "sentence_transformers.*"]
+module = [
+    "boto3.*",
+    "botocore.*",
+    "sentence_transformers.*",
+    "structlog.*",
+    "networkx.*",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
