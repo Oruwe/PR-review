@@ -79,7 +79,11 @@ def test_output_arrives_while_the_process_is_still_running() -> None:
         seen: list[tuple[str, int]] = []
 
         async def on_line(stream: str, text: str, offset_ms: int) -> None:
-            seen.append((text, offset_ms))
+            # Only the container's own output. On a cold machine `docker run`
+            # writes image-pull progress to stderr before the container starts,
+            # and that chatter is the client talking, not the job.
+            if stream == "stdout":
+                seen.append((text, offset_ms))
 
         name = f"pf-test-stream-{int(time.time() * 1000)}"
         result = await run_streaming(
@@ -93,6 +97,7 @@ def test_output_arrives_while_the_process_is_still_running() -> None:
 
     lines = asyncio.run(scenario())
     assert [text for text, _ in lines] == ["0", "1", "2", "3"]
+
     offsets = [offset for _, offset in lines]
     assert offsets == sorted(offsets), "offsets must be monotonic"
     # Captured-at-exit output would arrive with near-identical offsets.
