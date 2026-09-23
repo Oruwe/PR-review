@@ -238,6 +238,10 @@ class Store:
             (base_sha, head_sha, run_id),
         )
 
+    def set_run_base(self, run_id: str, base_sha: str) -> None:
+        """Measure a run from `base_sha`: where its pull request branched."""
+        self.db.execute("UPDATE runs SET base_sha = ? WHERE id = ?", (base_sha, run_id))
+
     def supersede(self, run_id: str, by: str) -> None:
         self.db.execute("UPDATE runs SET superseded_by = ? WHERE id = ?", (by, run_id))
 

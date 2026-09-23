@@ -11,7 +11,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-__all__ = ["REGRESSION_TEST", "build_repo"]
+__all__ = ["REGRESSION_TEST", "advance_base", "build_repo"]
 
 #: The test that passes at base and fails at head. Named so assertions can
 #: reference it without restating the string.
@@ -137,3 +137,32 @@ def build_repo(root: Path) -> tuple[Path, str, str]:
         check=True, capture_output=True, text=True,
     ).stdout.strip()
     return root, base, head
+
+
+def advance_base(root: Path, base: str) -> str:
+    """Move the base branch on after the pull request branched. Returns the new tip.
+
+    What every busy repository looks like: other work lands on the base branch
+    while a pull request is open. Here that work adds a public function and a
+    test the pull request's branch has never seen, so a run that compared head
+    with this tip would report both as removed by the pull request.
+    """
+    _git(root, "checkout", "-q", "-b", "moved-on", base)
+    (root / "shoplib" / "rounding.py").write_text(
+        '"""Rounding."""\n\n\ndef round_price(amount: float) -> float:\n'
+        '    """Round to cents."""\n    return round(amount, 2)\n',
+        encoding="utf-8",
+    )
+    (root / "tests" / "test_rounding.py").write_text(
+        "from shoplib.rounding import round_price\n\n\n"
+        "def test_round_price_keeps_cents():\n    assert round_price(1.234) == 1.23\n",
+        encoding="utf-8",
+    )
+    _git(root, "add", "-A")
+    _git(root, "commit", "-qm", "feat: rounding")
+    tip = subprocess.run(  # noqa: S603
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    _git(root, "checkout", "-q", "main")
+    return tip
