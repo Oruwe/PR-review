@@ -423,6 +423,14 @@ end to end, from a clean `.cache/`, in under 10 minutes.
 
 ## Out of scope — do not build
 
-Cross-repo blast radius. Org/project norm scopes beyond the persisted field. Incremental
-brain updates. Norm decay. Languages other than Python. A web server. Authentication. A
-queue or worker pool beyond `asyncio.Semaphore`. Neo4j. Any vector database.
+Cross-repo blast radius. Org/project norm scopes beyond the persisted field. Norm decay.
+Authentication. A queue or worker pool beyond `asyncio.Semaphore`. Neo4j. Any vector
+database. A build step, a bundler, or a CDN for the web interface.
+
+Three former entries moved in scope with v2 and are specified in `SPEC-V2.md`: **a web
+server** (the service is the product surface now), **languages other than Python** (a
+toolchain pack per ecosystem, plus a generic fallback), and **incremental brain updates**
+(a polling service cannot re-harvest everything each cycle).
+
+The `asyncio.Semaphore` bound stays. The bottleneck is the container, and two of them
+saturate a four-core box; a broker would add moving parts without adding throughput.

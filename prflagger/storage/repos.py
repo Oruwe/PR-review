@@ -213,6 +213,18 @@ class Store:
             )
         ]
 
+    def retarget(self, run_id: str, base_sha: str, head_sha: str) -> None:
+        """Point a not-yet-started run at different commits.
+
+        Used when a PR is force-pushed while its run is still queued: the run
+        must verify the newest commit, not the one that happened to be current
+        when it was created.
+        """
+        self.db.execute(
+            "UPDATE runs SET base_sha = ?, head_sha = ? WHERE id = ? AND state = 'queued'",
+            (base_sha, head_sha, run_id),
+        )
+
     def supersede(self, run_id: str, by: str) -> None:
         self.db.execute("UPDATE runs SET superseded_by = ? WHERE id = ?", (by, run_id))
 

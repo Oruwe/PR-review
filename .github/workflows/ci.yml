@@ -5,17 +5,15 @@ on:
     branches: [main]
   pull_request:
 
-# CLAUDE.md is non-negotiable: never mock Docker, git, or the target repo. So this
-# workflow does not split off a "fast" job that skips the sandbox tests — it runs
-# the real suite, in one job, the same way `pytest tests/ -x -q` does locally.
-# GitHub-hosted ubuntu runners ship Docker Engine already running, and have normal
-# internet access to Docker Hub, PyPI and GitHub — none of the registry-mirror or
-# host-binary staging this repo's session-start hook does for its own sandboxed dev
-# container are needed here.
+# CLAUDE.md is non-negotiable: never mock Docker, git, or the repo under analysis.
+# So this workflow runs real containers against a real git repository. GitHub-hosted
+# ubuntu runners ship Docker Engine already running and have normal internet access,
+# so none of the registry-mirror or host-binary staging this repo's session-start
+# hook does for its own sandboxed dev container is needed here.
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 
@@ -36,19 +34,20 @@ jobs:
       - name: Docker sanity
         run: docker info
 
+      # The v2 suites build their own repository and run their own containers, so
+      # they need no seeding and no network beyond the base image. Running them
+      # first means a regression in the service surfaces before the slower,
+      # network-dependent v1 fixtures get a chance to fail for their own reasons.
+      - name: v2 suites
+        run: pytest tests/test_v2_*.py tests/test_models.py -q
+
       - name: Clone the target repo
-        # seed_target.py refuses to run without this clone already present — on a
-        # fresh checkout nothing has made it yet. Locally it usually already
-        # exists from earlier fixture runs, which is exactly the kind of local
-        # state this workflow can't assume.
-        run: python3 -c "from prflagger.sandbox.runner import bare_clone; bare_clone('pallets/click')"
+        run: python3 -c "from prflagger.vcs.worktrees import bare_clone; bare_clone('pallets/click')"
 
       - name: Seed the target repo's demo branches
-        # A large slice of the suite (test_cli, test_differential, test_probes,
-        # test_report) requires these and fails with a named, non-cryptic error
-        # without them — README documents this as a precondition, but nothing
-        # in this workflow had actually run it.
+        # test_cli, test_differential, test_probes and test_report require these and
+        # fail with a named, non-cryptic error without them.
         run: python -m scripts.seed_target
 
-      - name: pytest
+      - name: Full suite
         run: pytest tests/ -q

@@ -103,6 +103,10 @@ def _json_default(value: object) -> object:
 class TestResult:
     """What a sandbox run observed. `outcome` carries failure modes, including OOM."""
 
+    #: Not a pytest test class, despite the name. Without this pytest tries to
+    #: collect it and warns on every run that imports it.
+    __test__ = False
+
     outcome: Outcome
     per_test: dict[str, str]  # pytest nodeid -> "passed"|"failed"|"error"
     duration_s: float

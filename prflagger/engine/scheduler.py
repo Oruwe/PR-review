@@ -34,6 +34,7 @@ log = structlog.get_logger(__name__)
 class _Pending:
     pull: PullRequest
     trigger: str
+    run_id: str = ""
     queued_at: float = field(default_factory=time.time)
 
 
@@ -103,14 +104,30 @@ class Scheduler:
             ):
                 # Same code, same answer. Re-running would only cost time.
                 return None
-            if key in self._pending:
-                # Head moved again inside the debounce window: replace the
-                # pending entry so only the newest sha is ever run.
-                self._pending[key] = _Pending(pull=pull, trigger=trigger)
-                return None
+            pending = self._pending.get(key)
+            if pending is not None and pending.run_id:
+                # The head moved again while a run for this PR was still queued.
+                # Collapsing the storm into one run is right, but the queued run
+                # has the *old* sha baked in — leaving it would verify the commit
+                # that happened to be current when it was created. Point it at the
+                # newest one instead.
+                self._pending[key] = _Pending(
+                    pull=pull, trigger=trigger, run_id=pending.run_id,
+                    queued_at=pending.queued_at,
+                )
+                self._store.retarget(pending.run_id, pull.base_sha, pull.head_sha)
+                self._bus.emit(
+                    "run.retargeted", run_id=pending.run_id, repo=pull.repo,
+                    pr_number=pull.number, head_sha=pull.head_sha,
+                )
+                log.info(
+                    "run.retargeted", run=pending.run_id, repo=pull.repo,
+                    pr=pull.number, head=pull.head_sha[:12],
+                )
+                return pending.run_id
 
-        self._pending[key] = _Pending(pull=pull, trigger=trigger)
         identifier = self._create(pull, trigger)
+        self._pending[key] = _Pending(pull=pull, trigger=trigger, run_id=identifier)
         self._queue.put_nowait(identifier)
         return identifier
 
@@ -175,6 +192,8 @@ class Scheduler:
                 if age < self._config.server.debounce_s:
                     await asyncio.sleep(self._config.server.debounce_s - age)
                 self._pending.pop(key, None)
+                # Re-read: the head may have been retargeted while this waited.
+                run = self._store.run(identifier) or run
 
             task = asyncio.create_task(self._worker.execute(run), name=f"pf-run-{identifier}")
             self._active[identifier] = task
