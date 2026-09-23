@@ -36,9 +36,16 @@ log = structlog.get_logger(__name__)
 LineSink = Callable[[str, str, int], Awaitable[None] | None]  # stream, text, offset_ms
 SampleSink = Callable[[float, int, int, int], Awaitable[None] | None]  # cpu, rss, pids, offset
 
-#: A single line longer than this is truncated. A test that dumps a megabyte on
-#: one line should not be able to push everything else out of the transcript.
+#: A single line longer than this is cut *for display*. A test that dumps a
+#: megabyte on one line should not be able to push everything else out of the
+#: transcript. The parsers still get the whole line: see `_Capture`.
 _MAX_LINE_CHARS = 20_000
+
+#: The most output kept for the parsers, per stream. Reporters print their whole
+#: document on one line — pytest-json-report's is about half a megabyte for
+#: pallets/click's 2,000 tests — so this is sized for a large suite's report, not
+#: for a screenful. It also bounds the longest single line that can be read.
+MAX_CAPTURE_BYTES = 64 * 1024 * 1024
 
 
 @dataclass
@@ -53,13 +60,14 @@ class StreamResult:
     peak_cpu_pct: float = 0.0
     samples: int = 0
     lines_emitted: int = 0
-    truncated: bool = False
+    truncated: bool = False  # the transcript stopped early
+    capture_full: bool = False  # the parsers' copy stopped early; a report may be lost
     timed_out: bool = False
 
 
 @dataclass
 class _Budget:
-    """Bounds the transcript so a runaway suite cannot exhaust memory."""
+    """Bounds the transcript so a runaway suite cannot flood the log or the UI."""
 
     max_lines: int
     max_bytes: int
@@ -78,6 +86,32 @@ class _Budget:
         return True
 
 
+@dataclass
+class _Capture:
+    """What the parsers read: whole lines, bounded apart from the transcript.
+
+    Cutting a line for display must not cut it here — a report cut at 20,000
+    characters does not parse, and the run then says the suite produced no
+    per-test results. Nor may a noisy suite that fills the transcript lose the
+    report it prints at the end. The first `max_bytes` are kept; past that the
+    capture stops and says so.
+    """
+
+    max_bytes: int
+    lines: list[str]
+    bytes_: int = 0
+    full: bool = False
+
+    def keep(self, text: str) -> None:
+        if self.full:
+            return
+        self.bytes_ += len(text) + 1
+        if self.bytes_ > self.max_bytes:
+            self.full = True
+            return
+        self.lines.append(text)
+
+
 async def _maybe_await(value: Awaitable[None] | None) -> None:
     if value is not None:
         await value
@@ -89,32 +123,36 @@ async def _drain(
     started: float,
     on_line: LineSink | None,
     budget: _Budget,
-    collected: list[str],
+    capture: _Capture,
 ) -> None:
     """Read one stream to EOF, line by line, without buffering the whole thing."""
     while True:
         try:
             raw = await reader.readline()
-        except (ValueError, asyncio.LimitOverrunError):
-            # A line longer than the stream limit: take what is there and carry on.
-            raw = await reader.read(_MAX_LINE_CHARS)
+        except ValueError:
+            # Longer than the reader's limit (`MAX_CAPTURE_BYTES`). asyncio has
+            # already discarded it; say so rather than pass on a fragment.
+            capture.full = True
+            if on_line is not None:
+                notice = "… a line longer than the capture limit was dropped"
+                await _maybe_await(on_line("meta", notice, _offset(started)))
+            continue
         if not raw:
             return
         text = raw.decode("utf-8", "replace").rstrip("\n")
+        capture.keep(text)
+
+        shown = text
         if len(text) > _MAX_LINE_CHARS:
-            text = text[:_MAX_LINE_CHARS] + f"… [{len(text) - _MAX_LINE_CHARS} more characters]"
-
-        if not budget.allow(text):
-            if budget.tripped and budget.lines == budget.max_lines + 1:
+            hidden = len(text) - _MAX_LINE_CHARS
+            shown = f"{text[:_MAX_LINE_CHARS]}… [{hidden} more characters]"
+        if not budget.allow(shown):
+            if budget.tripped and budget.lines == budget.max_lines + 1 and on_line is not None:
                 notice = "… output limit reached; the rest of this run is not recorded"
-                collected.append(notice)
-                if on_line is not None:
-                    await _maybe_await(on_line("meta", notice, _offset(started)))
+                await _maybe_await(on_line("meta", notice, _offset(started)))
             continue
-
-        collected.append(text)
         if on_line is not None:
-            await _maybe_await(on_line(stream, text, _offset(started)))
+            await _maybe_await(on_line(stream, shown, _offset(started)))
 
 
 def _offset(started: float) -> int:
@@ -223,24 +261,29 @@ async def run_streaming(
     sample_interval_s: float = 1.0,
     max_lines: int = 50_000,
     max_bytes: int = 8 * 1024 * 1024,
+    max_capture_bytes: int = MAX_CAPTURE_BYTES,
 ) -> StreamResult:
     """Run `argv`, streaming its output. Never raises for the job's own failure.
 
     `container_name` enables resource sampling; without it the run still streams,
     it just cannot report memory. Pass the same name the `docker run --name` flag
     carries.
+
+    Two bounds, for two readers: `max_lines`/`max_bytes` limit the transcript a
+    person reads, with long lines cut; `max_capture_bytes` limits the whole-line
+    `stdout`/`stderr` the parsers read.
     """
     started = time.monotonic()
     budget = _Budget(max_lines=max_lines, max_bytes=max_bytes)
-    out_lines: list[str] = []
-    err_lines: list[str] = []
+    out = _Capture(max_bytes=max_capture_bytes, lines=[])
+    err = _Capture(max_bytes=max_capture_bytes, lines=[])
 
     try:
         process = await asyncio.create_subprocess_exec(
             *argv,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            limit=1024 * 1024,
+            limit=max_capture_bytes,
         )
     except OSError as error:
         return StreamResult(
@@ -255,10 +298,10 @@ async def run_streaming(
     assert process.stdout is not None and process.stderr is not None  # noqa: S101 - PIPE above
     drains = [
         asyncio.create_task(
-            _drain(process.stdout, "stdout", started, on_line, budget, out_lines)
+            _drain(process.stdout, "stdout", started, on_line, budget, out)
         ),
         asyncio.create_task(
-            _drain(process.stderr, "stderr", started, on_line, budget, err_lines)
+            _drain(process.stderr, "stderr", started, on_line, budget, err)
         ),
     ]
     sampler = (
@@ -283,11 +326,12 @@ async def run_streaming(
         await asyncio.gather(*drains, return_exceptions=True)
 
     result.returncode = 124 if timed_out else (process.returncode or 0)
-    result.stdout = "\n".join(out_lines)
-    result.stderr = "\n".join(err_lines)
+    result.stdout = "\n".join(out.lines)
+    result.stderr = "\n".join(err.lines)
     result.duration_s = time.monotonic() - started
     result.lines_emitted = budget.lines
     result.truncated = budget.tripped
+    result.capture_full = out.full or err.full
     result.timed_out = timed_out
     return result
 

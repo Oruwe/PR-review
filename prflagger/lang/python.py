@@ -93,10 +93,39 @@ def _parse_coverage(stdout: str) -> dict[str, set[int]]:
 
 
 #: pytest-json-report writes to a path; the container root is read-only, so it
-#: goes to /dev/stdout and the parser scans it back out.
+#: goes to /dev/stdout and the parser scans it back out. The parser reads only
+#: each test's nodeid and outcome, so the rest is left out: per-test keywords,
+#: tracebacks and captured output are most of a large suite's report. The list
+#: comes before `--json-report` because it takes every argument up to the next flag.
 _PYTEST = (
     "pytest", "-p", "no:cacheprovider", "-q",
+    "--json-report-omit", "collectors", "keywords", "log", "streams", "traceback",
+    "warnings",
     "--json-report", "--json-report-file=/dev/stdout",
+)
+
+_PIP = ("pip", "install", "--no-cache-dir", "--disable-pip-version-check")
+
+#: What a suite needs beyond the project's own dependencies, wherever the repository
+#: declares it. Without this, Textualize/rich's suite stops at collection on
+#: `import attr`. Each step may find nothing to do, and runs after the plain install
+#: so that one failing cannot undo it.
+#:
+#: Extras: pip installs those that exist and warns about the rest.
+_TEST_EXTRAS = (*_PIP, "/build[test,tests,testing,dev]")
+#: PEP 735 dependency groups, the standard place (pip 25.1 installs them): the first
+#: test-shaped group declared, or `dev` when there is none.
+_TEST_GROUP = (
+    "sh", "-c",
+    'for g in test tests testing dev; do ' + " ".join(_PIP) + ' --group "$g" && break; done',
+)
+#: Requirements files, the older convention.
+_REQUIREMENTS_FILES = ("requirements.txt", "requirements-dev.txt", "requirements-test.txt",
+                       "test-requirements.txt")
+_REQUIREMENTS = (
+    "sh", "-c",
+    f"for f in {' '.join(_REQUIREMENTS_FILES)}; do "
+    'if [ -f "$f" ]; then ' + " ".join(_PIP) + ' -r "$f"; fi; done',
 )
 
 PYTHON = Toolchain(
@@ -105,10 +134,10 @@ PYTHON = Toolchain(
     markers=("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"),
     base_image="python:3.11-slim",
     setup_lines=(
-        "RUN pip install --no-cache-dir --disable-pip-version-check"
+        "RUN pip install --no-cache-dir --disable-pip-version-check 'pip>=25.1'"
         " pytest pytest-json-report pytest-cov coverage ruff mypy",
     ),
-    install=(("pip", "install", "--no-cache-dir", "--disable-pip-version-check", "/build"),),
+    install=((*_PIP, "/build"), _TEST_EXTRAS, _TEST_GROUP, _REQUIREMENTS),
     test=TestCommand(argv=_PYTEST, report_format="pytest-json", selector_flag="-k"),
     lints=(
         LintCommand(
@@ -138,8 +167,8 @@ PYTHON = Toolchain(
     source_globs=("**/*.py",),
     test_globs=("**/test_*.py", "**/*_test.py", "tests/**/*.py"),
     lockfiles=(
-        "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt",
-        "requirements-dev.txt", "uv.lock", "poetry.lock", "Pipfile.lock",
+        "pyproject.toml", "setup.py", "setup.cfg", *_REQUIREMENTS_FILES,
+        "uv.lock", "poetry.lock", "Pipfile.lock",
     ),
     env=(("PYTHONDONTWRITEBYTECODE", "1"), ("PYTHONUNBUFFERED", "1")),
 )
