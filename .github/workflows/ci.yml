@@ -4,50 +4,157 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
-# CLAUDE.md is non-negotiable: never mock Docker, git, or the repo under analysis.
-# So this workflow runs real containers against a real git repository. GitHub-hosted
-# ubuntu runners ship Docker Engine already running and have normal internet access,
-# so none of the registry-mirror or host-binary staging this repo's session-start
-# hook does for its own sandboxed dev container is needed here.
+# A newer push makes an older run's answer worthless. Cancelling it frees a
+# runner instead of spending minutes computing a result nobody will read.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  FORCE_COLOR: "1"
+
 jobs:
-  test:
+  # Stage 1 — cheap, seconds, no containers. Catches most mistakes before any
+  # runner spends a minute pulling images.
+  static:
+    name: lint + types
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
-
-      - name: Install
-        run: pip install -e ".[dev,embed]"
-
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
       - name: ruff
-        run: ruff check .
-
+        run: ruff check --output-format=github .
       - name: mypy
         run: mypy prflagger/
 
+  # Stage 2 — the suites that need no network and no seeded fixtures. These are
+  # the ones that must never be red, so they gate everything after.
+  unit:
+    name: unit (py${{ matrix.python }})
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: Suites that need neither Docker nor the network
+        run: |
+          pytest -q --durations=10 \
+            tests/test_models.py tests/test_v2_storage.py tests/test_v2_lang.py \
+            tests/test_v2_api.py tests/test_v2_scheduler.py tests/test_v2_janitor.py \
+            tests/test_analysis.py tests/test_privacy.py tests/test_gitsafety.py
+
+  # Stage 3 — real containers. CLAUDE.md forbids mocking Docker, so this is the
+  # slow, honest half: it builds images and runs a real suite inside them.
+  sandbox:
+    name: sandbox (real containers)
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
       - name: Docker sanity
         run: docker info
+      - name: Warm the base image
+        # Pulled here so a pull failure reads as a pull failure, rather than as a
+        # confusing timeout inside whichever test happened to run first.
+        run: docker pull python:3.11-slim
+      - name: Sandbox and engine suites
+        run: pytest -q --durations=10 tests/test_v2_sandbox.py tests/test_v2_engine.py
+      - name: Transcripts from the failed run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sandbox-transcripts
+          path: .cache/runs/
+          retention-days: 7
+          if-no-files-found: ignore
 
-      # The v2 suites build their own repository and run their own containers, so
-      # they need no seeding and no network beyond the base image. Running them
-      # first means a regression in the service surfaces before the slower,
-      # network-dependent v1 fixtures get a chance to fail for their own reasons.
-      - name: v2 suites
-        run: pytest tests/test_v2_*.py tests/test_models.py -q
+  # Stage 4 — does the thing actually start and serve? A green test suite and a
+  # binary that will not boot are not the same claim.
+  smoke:
+    name: service smoke test
+    needs: [unit, sandbox]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev]"
+      - name: Boot the service and exercise it
+        run: |
+          set -euo pipefail
+          python -m prflagger.cli serve --no-watch --port 8123 &
+          SERVICE=$!
+          trap 'kill $SERVICE 2>/dev/null || true' EXIT
+          for _ in $(seq 1 45); do
+            curl -fsS http://127.0.0.1:8123/api/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8123/api/health | tee /dev/stderr | grep -q '"started":true'
+          for path in / /api/repos /api/budget; do
+            code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8123$path")
+            echo "$path -> $code"
+            [ "$code" = "200" ] || { echo "::error::$path returned $code"; exit 1; }
+          done
+      - name: The CLI's own surface
+        run: |
+          python -m prflagger.cli --help >/dev/null
+          python -m prflagger.cli gc --dry-run
 
-      - name: Clone the target repo
-        run: python3 -c "from prflagger.vcs.worktrees import bare_clone; bare_clone('pallets/click')"
-
-      - name: Seed the target repo's demo branches
-        # test_cli, test_differential, test_probes and test_report require these and
-        # fail with a named, non-cryptic error without them.
+  # Stage 5 — needs the network and a fork with seeded branches, so it is
+  # reported but does not gate. A fixture that cannot be built is not a defect
+  # in the change under review.
+  seeded:
+    name: seeded fixtures (informational)
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: pip install -e ".[dev,embed]"
+      - name: Clone the target repository
+        run: python -c "from prflagger.vcs.worktrees import bare_clone; bare_clone('pallets/click')"
+      - name: Seed its demo branches
         run: python -m scripts.seed_target
-
-      - name: Full suite
-        run: pytest tests/ -q
+      - name: The suites that depend on them
+        run: |
+          pytest -q tests/test_cli.py tests/test_differential.py \
+                    tests/test_probes.py tests/test_report.py tests/test_internals.py

@@ -58,6 +58,16 @@ Every `Finding` must carry all four or it is not emitted:
 - **Every state change is an event.** The live view and the stored transcript are the same
   append-only log replayed, not two implementations. There is no second code path for
   "watching" a run.
+- **Nothing unbounded goes in the events table.** A record whose volume scales with the
+  repository under test — a log line — is `publish`ed, not `emit`ted: fanned out live, with
+  its durable copy on disk. The `events` table must stay proportional to the number of runs,
+  never to how much those runs printed.
+- **Every accumulating resource has a reclaimer.** Worktrees, images, transcripts and cached
+  job results all grow per run; `engine/janitor.py` removes what no recent or in-flight run
+  needs, and the service sweeps hourly. A job refuses to start below 5% free disk rather
+  than failing halfway.
+- **The queue is bounded and fair.** Admission stops at `server.max_queue_depth`, and
+  dispatch is round-robin per repository, so one busy repository cannot starve the rest.
 
 ## Conventions
 

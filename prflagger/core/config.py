@@ -106,6 +106,10 @@ class ServerConfig:
     poll_interval_s: int = 120
     event_retention_days: int = 7
     debounce_s: int = 30
+    #: How many runs may wait at once, across all repositories. An unbounded
+    #: queue under sustained load is a slower way to run out of memory, and a
+    #: run admitted now that starts in six hours helps nobody.
+    max_queue_depth: int = 200
 
 
 @dataclass(frozen=True)

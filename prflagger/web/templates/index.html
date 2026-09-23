@@ -22,9 +22,13 @@
     <div class="label">Watched</div>
   </div>
   <div class="stat">
-    <div class="value">{{ health.queue_depth }}</div>
+    <div class="value">{{ health.queue_depth }}<span class="muted"
+      style="font-size:.9rem">/{{ health.queue_cap }}</span></div>
     <div class="label">Queued</div>
-    <div class="sub">{{ health.active_runs|length }} running now</div>
+    <div class="sub">
+      {{ health.active_runs|length }} running now{% if health.queue_rejected %} ·
+      <span style="color:var(--critical)">{{ health.queue_rejected }} refused</span>{% endif %}
+    </div>
   </div>
   <div class="stat">
     <div class="value">{{ health.sandbox_capacity }}</div>
@@ -32,8 +36,13 @@
     <div class="sub">concurrent containers</div>
   </div>
   <div class="stat">
-    <div class="value">{{ health.event_head }}</div>
-    <div class="label">Events recorded</div>
+    <div class="value">{{ "%.0f"|format(health.disk_free_ratio * 100) }}%</div>
+    <div class="label">Disk free</div>
+    <div class="sub">
+      {% if health.disk_free_ratio < 0.1 %}
+        <span style="color:var(--critical)">run <code>prflagger gc</code></span>
+      {% else %}headroom for runs{% endif %}
+    </div>
   </div>
   <div class="stat">
     <div class="value">{% if health.github_authenticated %}yes{% else %}no{% endif %}</div>

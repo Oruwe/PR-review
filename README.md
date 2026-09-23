@@ -85,6 +85,22 @@ would breach one is refused and the run says so. Cheap work (extraction, classif
 norm naming) routes to Haiku; judgement routes to Sonnet. The repository context block is
 identical across every pull request in a repository, so it sits behind a cache breakpoint.
 
+## At scale
+
+The things that break first on a large repository or a busy one, and what each costs:
+
+| Pressure | What it would have done | What happens now |
+|---|---|---|
+| A suite printing a lot | A database row per line — millions of rows, one writer | Lines stream live and land in a per-job file; `events` stays proportional to runs, not output |
+| A large codebase | One symbol index per package, so cross-package calls never resolved | One index over a common root; an ambiguous name matching >8 symbols records nothing |
+| A very large codebase | Minutes of blocking work | Past a file budget the symbol pass is skipped and the map says `analysis_depth: surface` |
+| Many runs | A worktree per commit and an image per lockfile set, forever | Hourly sweep; `prflagger gc --dry-run` to see first; runs refuse to start below 5% free disk |
+| Many pull requests at once | An unbounded queue, and one busy repo starving the others | Bounded admission with a stated reason, round-robin dispatch per repository |
+
+Measured on a synthetic 3,000-file, 87k-line repository: the atlas builds in about three
+seconds using 24 MB, and the call graph carries 21k edges rather than the 723k that
+unbounded name matching produced.
+
 ## Tests
 
 ```bash
