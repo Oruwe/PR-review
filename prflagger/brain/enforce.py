@@ -17,7 +17,7 @@ from typing import Any
 
 import structlog
 
-__all__ = ["enforced_comments", "retention_rate"]
+__all__ = ["enforced_comments", "judge_comments", "retention_rate"]
 
 log = structlog.get_logger(__name__)
 
@@ -33,41 +33,58 @@ def enforced_comments(prs_json: Path) -> list[dict[str, Any]]:
     if not isinstance(records, list):
         return []
 
-    kept: list[dict[str, Any]] = []
-    seen = 0
+    judged = judge_comments(records)
+    kept = [
+        {key: comment[key] for key in _DOCUMENTED_FIELDS}
+        for comment in judged
+        if comment["enforced"]
+    ]
+    rate = retention_rate(len(judged), len(kept))
+    log.info("enforced", seen=len(judged), kept=len(kept), retention_rate=round(rate, 4))
+    return kept
+
+
+_DOCUMENTED_FIELDS = ("pr_number", "reviewer_login", "body", "diff_hunk", "created_at")
+
+
+def judge_comments(records: list[Any]) -> list[dict[str, Any]]:
+    """Every review comment in `records`, each marked `enforced` or not.
+
+    The service keeps the ones that were not enforced too, so the retention rate
+    it reports is measured rather than remembered. Beyond the five documented
+    fields each carries `comment_id`, `path` and `html_url`, which is what lets a
+    norm cite the exact comment it came from.
+    """
+    out: list[dict[str, Any]] = []
     for pull in records:
         if not isinstance(pull, dict):
             continue
-        comments = [c for c in pull.get("review_comments", []) if isinstance(c, dict)]
-        seen += len(comments)
-
-        if not pull.get("merged_at"):
-            continue  # an unmerged PR enforced nothing
-
+        merged = bool(pull.get("merged_at"))
         commit_times = sorted(
             filter(None, (_commit_time(commit) for commit in pull.get("commits", [])))
         )
-        if not commit_times:
-            continue
-        latest = commit_times[-1]
-
-        for comment in comments:
+        latest = commit_times[-1] if commit_times else None
+        for comment in pull.get("review_comments", []):
+            if not isinstance(comment, dict):
+                continue
             created = _parse(comment.get("created_at"))
-            if created is None or created >= latest:
-                continue  # nothing landed after it, so nothing was enforced
-            kept.append(
-                {
-                    "pr_number": int(pull.get("number", 0)),
-                    "reviewer_login": str((comment.get("user") or {}).get("login", "")),
-                    "body": str(comment.get("body", "")),
-                    "diff_hunk": str(comment.get("diff_hunk", "")),
-                    "created_at": str(comment.get("created_at", "")),
-                }
+            # An unmerged PR enforced nothing, and a comment with nothing landing
+            # after it was, as far as the history can show, not acted on.
+            enforced = (
+                merged and latest is not None and created is not None and created < latest
             )
-
-    rate = retention_rate(seen, len(kept))
-    log.info("enforced", seen=seen, kept=len(kept), retention_rate=round(rate, 4))
-    return kept
+            out.append({
+                "pr_number": int(pull.get("number", 0)),
+                "reviewer_login": str((comment.get("user") or {}).get("login", "")),
+                "body": str(comment.get("body", "")),
+                "diff_hunk": str(comment.get("diff_hunk", "")),
+                "created_at": str(comment.get("created_at", "")),
+                "comment_id": int(comment.get("id") or 0),
+                "path": str(comment.get("path") or ""),
+                "html_url": str(comment.get("html_url") or ""),
+                "enforced": enforced,
+            })
+    return out
 
 
 def retention_rate(seen: int, kept: int) -> float:

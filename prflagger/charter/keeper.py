@@ -20,6 +20,7 @@ from typing import Any
 import structlog
 
 from prflagger.atlas.build import build_atlas
+from prflagger.brain.declared import declared_norms
 from prflagger.charter.drift import compare, evidence_lines, headline
 from prflagger.charter.extract import extract_charter
 from prflagger.core.config import Config
@@ -135,6 +136,8 @@ class CharterKeeper:
 
         previous = self._store.charter(slug)
         stored = self._store.put_charter(fresh)
+        # Declared norms come from the same files, so they move with the charter.
+        self._store.replace_norms(slug, "declared", declared_norms(tree, toolchain))
 
         if previous is None:
             self._bus.emit(

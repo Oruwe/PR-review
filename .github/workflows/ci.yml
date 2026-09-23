@@ -63,7 +63,8 @@ jobs:
           pytest -q --durations=10 \
             tests/test_models.py tests/test_v2_storage.py tests/test_v2_lang.py \
             tests/test_v2_api.py tests/test_v2_scheduler.py tests/test_v2_janitor.py \
-            tests/test_v2_charter.py \
+            tests/test_v2_charter.py tests/test_v2_brain.py \
+            tests/test_brain.py \
             tests/test_analysis.py tests/test_privacy.py tests/test_gitsafety.py
 
   # Stage 3 — real containers. CLAUDE.md forbids mocking Docker, so this is the
@@ -158,4 +159,10 @@ jobs:
       - name: The suites that depend on them
         run: |
           pytest -q tests/test_cli.py tests/test_differential.py \
-                    tests/test_probes.py tests/test_report.py tests/test_internals.py
+                    tests/test_probes.py tests/test_report.py tests/test_internals.py \
+                    tests/test_norms.py
+      - name: Review history, read live from this repository
+        env:
+          PRFLAGGER_LIVE_GITHUB: "1"
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: pytest -q -rs tests/test_v2_brain.py -k live

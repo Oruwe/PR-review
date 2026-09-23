@@ -20,6 +20,7 @@ from prflagger.core.models import (
     CharterDrift,
     Citation,
     Claim,
+    Norm,
     Notification,
     Observation,
     PullRequest,
@@ -294,17 +295,19 @@ class Store:
             """
             INSERT INTO observations (id, run_id, kind, symbol, what_changed, how_we_know,
                                       evidence_ref, severity, confidence, rank_score,
-                                      relevance, relevance_note)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                      relevance, relevance_note, norm_id)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 rank_score = excluded.rank_score,
+                confidence = excluded.confidence,
                 relevance = excluded.relevance,
-                relevance_note = excluded.relevance_note
+                relevance_note = excluded.relevance_note,
+                norm_id = excluded.norm_id
             """,
             [
                 (o.id, o.run_id, o.kind, o.symbol, o.what_changed, o.how_we_know,
                  o.evidence_ref, o.severity, o.confidence, o.rank_score,
-                 o.relevance, o.relevance_note)
+                 o.relevance, o.relevance_note, o.norm_id or None)
                 for o in observations
             ],
         )
@@ -321,6 +324,7 @@ class Store:
                 evidence_ref=r["evidence_ref"], severity=r["severity"],
                 confidence=r["confidence"], rank_score=r["rank_score"],
                 relevance=r["relevance"], relevance_note=r["relevance_note"],
+                norm_id=r["norm_id"] or "",
             )
             for r in rows
         ]
@@ -605,6 +609,118 @@ class Store:
         )
 
 
+    # -- review history and norms ----------------------------------------------
+
+    def put_review_comments(self, repo: str, judged: list[dict[str, Any]]) -> int:
+        """Record judged review comments; returns how many enforced ones were new."""
+        before = self.review_counts(repo)[1]
+        self.db.executemany(
+            """
+            INSERT INTO review_comments (repo, comment_key, pr_number, reviewer, body, path,
+                                         html_url, created_at, enforced)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(repo, comment_key) DO UPDATE SET
+                body = excluded.body, enforced = excluded.enforced
+            """,
+            [
+                (
+                    repo, _comment_key(c), int(c["pr_number"]), c["reviewer_login"],
+                    c["body"], c.get("path", ""), c.get("html_url", ""), c["created_at"],
+                    1 if c["enforced"] else 0,
+                )
+                for c in judged
+            ],
+        )
+        return self.review_counts(repo)[1] - before
+
+    def review_comments(
+        self, repo: str, *, enforced_only: bool = True, limit: int = 2000
+    ) -> list[dict[str, Any]]:
+        """This repository's review comments, newest first."""
+        sql = "SELECT * FROM review_comments WHERE repo = ?"
+        if enforced_only:
+            sql += " AND enforced = 1"
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        return [
+            {
+                "comment_key": r["comment_key"], "pr_number": r["pr_number"],
+                "reviewer_login": r["reviewer"], "body": r["body"], "path": r["path"],
+                "html_url": r["html_url"], "created_at": r["created_at"],
+                "enforced": bool(r["enforced"]),
+            }
+            for r in self.db.query(sql, (repo, limit))
+        ]
+
+    def review_counts(self, repo: str) -> tuple[int, int]:
+        """(comments seen, comments enforced) for this repository."""
+        row = self.db.one(
+            "SELECT COUNT(*) AS seen, COALESCE(SUM(enforced), 0) AS kept"
+            " FROM review_comments WHERE repo = ?",
+            (repo,),
+        )
+        return (int(row["seen"]), int(row["kept"])) if row else (0, 0)
+
+    def brain_state(self, repo: str) -> dict[str, Any] | None:
+        row = self.db.one("SELECT * FROM brain_state WHERE repo = ?", (repo,))
+        return dict(row) if row else None
+
+    def put_brain_state(self, repo: str, **fields: Any) -> None:
+        allowed = {"harvested_through", "prs_seen", "built_at", "clustered_by",
+                   "named_by", "note"}
+        unknown = set(fields) - allowed
+        if unknown:
+            raise ValueError(f"unknown brain_state fields: {sorted(unknown)}")
+        self.db.execute("INSERT OR IGNORE INTO brain_state (repo) VALUES (?)", (repo,))
+        if fields:
+            assignments = ", ".join(f"{name} = ?" for name in fields)
+            self.db.execute(
+                f"UPDATE brain_state SET {assignments} WHERE repo = ?",  # noqa: S608 - names checked above
+                (*fields.values(), repo),
+            )
+
+    def replace_norms(self, repo: str, source: str, norms: list[Norm]) -> None:
+        """Swap this repository's norms from one source for a new set, atomically.
+
+        Declared and mined norms are replaced independently: re-reading the
+        configuration must not throw away what was learned from reviews.
+        """
+        if any(norm.source != source for norm in norms):
+            raise ValueError(f"every norm passed must have source={source!r}")
+        with self.db.transaction() as connection:
+            connection.execute(
+                "DELETE FROM norms WHERE repo = ? AND source = ?", (repo, source)
+            )
+            connection.executemany(
+                """
+                INSERT OR REPLACE INTO norms (id, repo, statement, scope, support,
+                    distinct_reviewers, confidence, evidence_prs, source, quote, evidence,
+                    clustered_by, named_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        n.id, repo, n.statement, n.scope, n.support, n.distinct_reviewers,
+                        n.confidence, json_col(list(n.evidence_prs)), n.source, n.quote,
+                        json_col([list(e) for e in n.evidence]), n.clustered_by, n.named_by,
+                    )
+                    for n in norms
+                ],
+            )
+
+    def norms(self, repo: str) -> list[Norm]:
+        """This repository's norms, declared first, then by confidence. Never another's."""
+        rows = self.db.query(
+            "SELECT * FROM norms WHERE repo = ?"
+            " ORDER BY source = 'mined', confidence DESC, support DESC, id",
+            (repo,),
+        )
+        return [_norm_from(r) for r in rows]
+
+    def norm(self, repo: str, norm_id: str) -> Norm | None:
+        row = self.db.one("SELECT * FROM norms WHERE repo = ? AND id = ?", (repo, norm_id))
+        return _norm_from(row) if row else None
+
+
 def _charter_dict(charter: Charter) -> dict[str, Any]:
     return {
         "repo": charter.repo, "sha": charter.sha, "name": charter.name,
@@ -642,4 +758,29 @@ def _charter_from(data: dict[str, Any], row: Any) -> Charter:
         standards=tuple(data.get("standards", [])),
         built_at=float(row["built_at"]),
         number=int(row["number"]),
+    )
+
+
+def _comment_key(comment: dict[str, Any]) -> str:
+    """GitHub's comment id when there is one; otherwise a digest of what identifies it."""
+    if comment.get("comment_id"):
+        return str(comment["comment_id"])
+    import hashlib
+
+    basis = f"{comment['pr_number']}|{comment['created_at']}|{comment['body']}"
+    return "h" + hashlib.sha1(basis.encode("utf-8")).hexdigest()[:16]  # noqa: S324 - an id, not security
+
+
+def _norm_from(row: Any) -> Norm:
+    return Norm(
+        id=row["id"], statement=row["statement"], scope=row["scope"],
+        support=int(row["support"]), distinct_reviewers=int(row["distinct_reviewers"]),
+        confidence=float(row["confidence"]),
+        evidence_prs=tuple(int(n) for n in _loads(row["evidence_prs"], [])),
+        source=row["source"], quote=row["quote"],
+        evidence=tuple(
+            (int(e[0]), str(e[1]), str(e[2])) for e in _loads(row["evidence"], [])
+            if isinstance(e, list) and len(e) == 3
+        ),
+        clustered_by=row["clustered_by"], named_by=row["named_by"],
     )

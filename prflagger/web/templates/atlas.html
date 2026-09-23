@@ -96,6 +96,65 @@
 </div>
 {% endif %}
 
+{% if brain and (brain.declared or brain.mined or brain.comments_seen or brain.note) %}
+<div class="card" style="margin-bottom:18px" id="norms">
+  <header>
+    <h2>What this repository holds itself to</h2>
+    <span class="spacer"></span>
+    <button id="relearn" title="Read new review history now and mine the norms again">Re-read reviews</button>
+  </header>
+  <p class="subtle" style="margin-top:0">Standards the repository declares in its own
+    configuration, and standards its reviewers enforced: a review comment counts only if the
+    author changed the code after it and the pull request merged.</p>
+
+  {% if brain.declared %}
+  <h3 style="margin:12px 0 6px">Declared by its configuration</h3>
+  <ul class="claims">
+    {% for n in brain.declared %}
+    <li><span class="text">{{ n.statement }}</span>
+      {% for e in n.evidence %}<span class="src">{{ e.where }}</span>{% endfor %}</li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  <h3 style="margin:16px 0 6px">Enforced in review</h3>
+  {% if brain.mined %}
+  <ul class="norms">
+    {% for n in brain.mined %}
+    <li id="norm-{{ n.id }}">
+      <div class="norm-head">
+        <strong>{{ n.statement }}</strong>
+        <span class="pill" title="comments behind it · distinct reviewers">{{ n.support }} comments · {{ n.distinct_reviewers }} reviewers</span>
+      </div>
+      {% if n.named_by != 'quote' and n.quote %}
+      <blockquote class="norm-quote">“{{ n.quote }}”</blockquote>
+      {% endif %}
+      <div class="norm-evidence">
+        {% for e in n.evidence[:8] %}
+          {% if e.url %}<a href="{{ e.url }}" rel="noopener">#{{ e.pr }}</a>{% else %}<span>#{{ e.pr }}</span>{% endif %}{% if e.where %}<span class="muted"> {{ e.where }}</span>{% endif %}{% if not loop.last %} · {% endif %}
+        {% endfor %}
+        {% if n.evidence|length > 8 %}<span class="muted"> +{{ n.evidence|length - 8 }} more</span>{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <p class="muted" style="margin:0">None yet.</p>
+  {% endif %}
+  <p class="muted" style="font-size:.8rem;margin:10px 0 0">
+    {% if brain.on_github %}
+      {{ brain.pulls_read }} merged pull request{{ '' if brain.pulls_read == 1 else 's' }} read ·
+      {{ brain.comments_enforced }} of {{ brain.comments_seen }} review comments enforced{% if brain.retention is not none %} ({{ (brain.retention * 100)|round|int }}%){% endif %}.
+    {% endif %}
+    {% if brain.mined %}{% set method = brain.mined[0] %}
+      Grouped {{ 'by meaning (sentence embeddings)' if method.clustered_by == 'semantic' else 'by shared words — install sentence-transformers to group by meaning' }};
+      {{ 'stated as each group’s most representative comment, quoted' if method.named_by == 'quote' else 'stated by ' ~ method.named_by ~ ' from each group, with the comments linked' }}.
+    {% endif %}
+    {% if brain.note %}{{ brain.note }}.{% endif %}
+  </p>
+</div>
+{% endif %}
+
 {% if not atlas %}
 <div class="card empty">
   <h3>No map yet</h3>
@@ -307,5 +366,19 @@ document.getElementById("rebuild").addEventListener("click", async (event) => {
     alert(error.message);
   }
 });
+
+const relearn = document.getElementById("relearn");
+if (relearn) {
+  relearn.addEventListener("click", async () => {
+    relearn.disabled = true; relearn.textContent = "Reading reviews…";
+    try {
+      await post("/api/repos/{{ repo.slug }}/norms", {});
+      location.reload();
+    } catch (error) {
+      relearn.disabled = false; relearn.textContent = "Re-read reviews";
+      alert(error.message);
+    }
+  });
+}
 </script>
 {% endblock %}

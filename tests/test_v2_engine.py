@@ -284,3 +284,7 @@ def test_the_pipeline_finds_the_undeclared_change(
     assert all(o.relevance in ("core", "supporting", "peripheral") for o in observations)
     assert behaviour[0].relevance == "core"
     assert any("demo/shoplib's own charter" in entry for entry in coverage["verified"])
+
+    # The behaviour change matters because the repository has a test suite, and the
+    # finding says so by pointing at the declared standard, not at an opinion.
+    assert behaviour[0].norm_id == "declared-tests"

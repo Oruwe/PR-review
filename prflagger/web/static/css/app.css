@@ -396,3 +396,15 @@ details.raw pre { background: var(--surface-sunken); border: 1px solid var(--bor
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+/* --------------------------------------------------------------- norms ---- */
+
+.norms { list-style: none; margin: 0; padding: 0; }
+.norms li { padding: 9px 0; border-bottom: 1px solid var(--border); }
+.norms li:last-child { border-bottom: none; }
+.norm-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.norm-head strong { flex: 1 1 260px; overflow-wrap: anywhere; }
+.norm-quote { margin: 6px 0 0; padding-left: 10px; border-left: 3px solid var(--border);
+              color: var(--ink-2); font-size: 0.88rem; overflow-wrap: anywhere; }
+.norm-evidence { margin-top: 5px; font-size: 0.8rem; font-family: var(--mono);
+                 overflow-wrap: anywhere; }

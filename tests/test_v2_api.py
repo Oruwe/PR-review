@@ -330,3 +330,42 @@ def test_the_report_says_what_it_judged_against(client: TestClient, service: Ser
     assert "ways of running the project were removed" in html or "1 way(s)" in html
     rows = client.get("/api/repos/demo/lib/pulls").json()
     assert rows[0]["charter_impact"] == "major"
+
+
+def test_the_standards_a_repository_holds_are_shown_with_their_evidence(
+    client: TestClient, service: Service
+) -> None:
+    from prflagger.core.models import Norm
+
+    run_id = _seed(service)
+    service.store.replace_norms("demo/lib", "declared", [Norm(
+        id="declared-lint-ruff", statement="Code must pass the repository's own ruff "
+        "configuration.", scope="repo", support=0, distinct_reviewers=0, confidence=1.0,
+        evidence_prs=(), source="declared", evidence=((0, "", "pyproject.toml:12"),),
+        named_by="config",
+    )])
+    service.store.replace_norms("demo/lib", "mined", [Norm(
+        id="review-add-a-changelog-entry", statement="Please add a changelog entry.",
+        scope="repo", support=4, distinct_reviewers=3, confidence=0.3,
+        evidence_prs=(41, 40), source="mined", quote="Please add a changelog entry.",
+        evidence=((41, "https://github.com/demo/lib/pull/41", "lib/x.py"),),
+        clustered_by="lexical", named_by="quote",
+    )])
+    payload = client.get("/api/repos/demo/lib/norms").json()
+    assert [n["id"] for n in payload["declared"]] == ["declared-lint-ruff"]
+    assert payload["mined"][0]["evidence"][0]["url"].endswith("/pull/41")
+
+    atlas = client.get("/repo/demo/lib").text
+    assert "What this repository holds itself to" in atlas
+    assert "pyproject.toml:12" in atlas and "/pull/41" in atlas
+    assert "by shared words" in atlas, "a lexical grouping must say that it is one"
+
+    # The lint finding carries the declared standard that makes it matter.
+    from dataclasses import replace
+
+    lint = next(o for o in service.store.observations(run_id) if o.kind == "lint_regression")
+    service.store.put_observations([replace(lint, norm_id="declared-lint-ruff")])
+    report = client.get(f"/api/runs/{run_id}/report").json()
+    by_kind = {f["kind"]: f for f in report["findings"]}
+    assert by_kind["lint_regression"]["norm"]["statement"].startswith("Code must pass")
+    assert "own ruff" in client.get(f"/runs/{run_id}/report").text

@@ -127,6 +127,11 @@
 
       <dt>Repo standard</dt>
       <dd>
+        {% if f.norm %}
+          <div>{{ f.norm.statement }}
+            {% for e in f.norm.evidence[:1] %}<span class="citation" title="Where the repository states this">{{ e.where or ('#' ~ e.pr) }}</span>{% endfor %}
+          </div>
+        {% endif %}
         {% if f.adjudication %}
           <strong>{{ f.adjudication.assessment|replace('_',' ') }}</strong>
           &mdash; {{ f.adjudication.reasoning }}
@@ -135,6 +140,7 @@
               <span class="citation" title="{{ c.quote }}">{{ c.type }}: {{ c.ref }}</span>
             {% endfor %}
           </div>
+        {% elif f.norm %}
         {% elif f.kind == 'behavior_change' %}
           <span class="subtle">Not required. A behaviour change is a fact about the program
             on its own &mdash; no repository standard has to make it matter.</span>

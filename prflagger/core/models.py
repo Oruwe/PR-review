@@ -123,7 +123,13 @@ class TestResult:
 
 @dataclass(frozen=True)
 class Norm:
-    """A repo standard mined from enforced review history."""
+    """A repo standard: declared by its configuration, or mined from enforced review.
+
+    The fields after `evidence_prs` say where the norm came from and how it was
+    derived, so the interface can show a reader exactly how much to trust it: a
+    statement a model wrote from a cluster is not the same thing as a quoted
+    comment, and a lexical grouping is not a semantic one.
+    """
 
     id: str  # kebab-case slug
     statement: str  # imperative, one line
@@ -132,6 +138,13 @@ class Norm:
     distinct_reviewers: int
     confidence: float  # 0.0-1.0
     evidence_prs: tuple[int, ...]
+    source: str = "mined"  # "mined" | "declared"
+    quote: str = ""  # the most representative enforced comment, verbatim
+    # (pr number, link, file) per supporting comment, or the config file for a
+    # declared norm — what a citation of this norm can be checked against.
+    evidence: tuple[tuple[int, str, str], ...] = ()
+    clustered_by: str = ""  # "semantic" | "lexical" | "" (declared)
+    named_by: str = ""  # a model id, "quote", or "config"
 
 
 @dataclass(frozen=True)
@@ -304,6 +317,9 @@ class Observation:
     relevance: str = ""
     #: Which charter element it touches, with that element's own source.
     relevance_note: str = ""
+    #: The repository standard that makes this matter (a `Norm.id`), attached
+    #: deterministically from the repo's own configuration; empty when none does.
+    norm_id: str = ""
 
     def __post_init__(self) -> None:
         if not self.what_changed:

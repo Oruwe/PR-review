@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -152,16 +153,33 @@ class GitHub:
             time.sleep(min(delay, 300.0))
 
     def paged(
-        self, path: str, params: dict[str, Any] | None = None, *, limit: int = 100
+        self,
+        path: str,
+        params: dict[str, Any] | None = None,
+        *,
+        limit: int = 100,
+        stop: Callable[[dict[str, Any]], bool] | None = None,
+        conditional: bool = True,
     ) -> list[dict[str, Any]]:
-        """Follow `page` until `limit` items or the API runs out."""
+        """Follow `page` until `limit` items, the API runs out, or `stop` says so.
+
+        `stop` is checked per item, in order; the first item it accepts ends the
+        walk and is not returned. That is what makes an incremental harvest cost
+        only the pages that hold something new.
+        """
         out: list[dict[str, Any]] = []
         page, per_page = 1, min(100, max(1, limit))
         while len(out) < limit:
-            batch = self._get(path, {**(params or {}), "per_page": per_page, "page": page})
+            batch = self._get(
+                path, {**(params or {}), "per_page": per_page, "page": page},
+                conditional=conditional,
+            )
             if not isinstance(batch, list) or not batch:
                 break
-            out.extend(batch)
+            for item in batch:
+                if stop is not None and isinstance(item, dict) and stop(item):
+                    return out[:limit]
+                out.append(item)
             if len(batch) < per_page:
                 break
             page += 1
@@ -193,23 +211,37 @@ class GitHub:
             raise GitHubError(f"unexpected response shape for {slug}#{number}")
         return self._pull(slug, payload)
 
-    def merged_pulls(self, slug: str, *, limit: int = 150) -> list[dict[str, Any]]:
-        """Closed PRs, newest first. The Brain filters merged ones out of these."""
+    def closed_pulls(
+        self, slug: str, *, limit: int = 150, since: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Closed PRs, most recently updated first, stopping at `since` (an
+        `updated_at` already seen). Not conditional: a harvest walks history once,
+        and caching every page's ETag would grow without bound in a long-lived
+        process."""
         return self.paged(
             f"/repos/{slug}/pulls",
             {"state": "closed", "sort": "updated", "direction": "desc"},
             limit=limit,
+            stop=(lambda item: str(item.get("updated_at") or "") <= since) if since else None,
+            conditional=False,
         )
+
+    # Review comments and commits of a merged pull request do not change, so
+    # neither is worth an ETag entry that would live as long as the process.
 
     def review_comments(
         self, slug: str, number: int, *, limit: int = 100
     ) -> list[dict[str, Any]]:
-        return self.paged(f"/repos/{slug}/pulls/{number}/comments", limit=limit)
+        return self.paged(
+            f"/repos/{slug}/pulls/{number}/comments", limit=limit, conditional=False
+        )
 
     def pull_commits(
         self, slug: str, number: int, *, limit: int = 250
     ) -> list[dict[str, Any]]:
-        return self.paged(f"/repos/{slug}/pulls/{number}/commits", limit=limit)
+        return self.paged(
+            f"/repos/{slug}/pulls/{number}/commits", limit=limit, conditional=False
+        )
 
     def compare(self, slug: str, base: str, head: str) -> dict[str, Any]:
         payload = self._get(f"/repos/{slug}/compare/{base}...{head}", conditional=False)

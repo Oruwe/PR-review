@@ -22,6 +22,7 @@ from typing import Any
 
 import structlog
 
+from prflagger.brain.declared import declared_norms, norm_for_tool
 from prflagger.charter.drift import compare, evidence_lines, headline
 from prflagger.charter.extract import extract_charter
 from prflagger.charter.relevance import WEIGHT, grounded
@@ -280,6 +281,9 @@ class RunWorker:
             run, coverage, observations, base_tree, head_tree, toolchain, roots,
             base_index, head_index,
         )
+        observations = await _thread(
+            self._attach_norms, run, observations, base_tree, toolchain
+        )
 
         coverage.skip(
             "adjudication against repo norms",
@@ -435,6 +439,41 @@ class RunWorker:
             run.id, toolchain, usable.get("base", {}), usable.get("head", {})
         )
         return observations, ran, failed
+
+    def _attach_norms(
+        self, run: Run, observations: list[Observation], base_tree: Path, toolchain: Toolchain
+    ) -> list[Observation]:
+        """Name the repository standard that makes each finding matter.
+
+        Deterministic, and only from what the repository declares for itself: a
+        new ruff diagnostic matters because the repo configures ruff, an API change
+        because it keeps a changelog, a failing test because it has a suite. Norms
+        mined from review history are not attached here — matching free text to a
+        finding is judgement, and judgement belongs to adjudication, which must
+        cite what it relies on.
+        """
+        norms = {n.id: n for n in self._store.norms(run.repo) if n.source == "declared"}
+        if not norms:
+            # The charter has not been read yet; the base commit says the same thing.
+            declared = declared_norms(base_tree, toolchain)
+            self._store.replace_norms(run.repo, "declared", declared)
+            norms = {n.id: n for n in declared}
+
+        attached = []
+        for observation in observations:
+            candidate = ""
+            if observation.kind == "lint_regression":
+                candidate = norm_for_tool(observation.what_changed.split(" ", 1)[0])
+            elif observation.kind == "api_change":
+                candidate = "declared-changelog"
+            elif observation.kind in (
+                "behavior_change", "timeout", "oom", "coverage_gap", "test_removed"
+            ):
+                candidate = "declared-tests"
+            attached.append(
+                replace(observation, norm_id=candidate) if candidate in norms else observation
+            )
+        return attached
 
     def _rank(self, run: Run, observations: list[Observation]) -> list[Observation]:
         """Order by what the reader should look at first.

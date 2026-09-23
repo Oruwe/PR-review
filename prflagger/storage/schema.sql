@@ -155,7 +155,42 @@ CREATE TABLE IF NOT EXISTS norms (
     confidence         REAL NOT NULL DEFAULT 0,
     evidence_prs       TEXT NOT NULL DEFAULT '[]',
     embedding          BLOB,
+    source             TEXT NOT NULL DEFAULT 'mined',   -- "mined" | "declared"
+    quote              TEXT NOT NULL DEFAULT '',
+    evidence           TEXT NOT NULL DEFAULT '[]',      -- [[pr, url, where], ...]
+    clustered_by       TEXT NOT NULL DEFAULT '',
+    named_by           TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (repo, id)
+);
+
+-- Review comments harvested from merged pull requests, each judged enforced or
+-- not (brain/enforce.py). The unenforced ones are kept so the retention rate is
+-- measured, not remembered. Keyed by GitHub's comment id where it has one.
+CREATE TABLE IF NOT EXISTS review_comments (
+    repo        TEXT NOT NULL,
+    comment_key TEXT NOT NULL,
+    pr_number   INTEGER NOT NULL,
+    reviewer    TEXT NOT NULL DEFAULT '',
+    body        TEXT NOT NULL,
+    path        TEXT NOT NULL DEFAULT '',
+    html_url    TEXT NOT NULL DEFAULT '',
+    created_at  TEXT NOT NULL DEFAULT '',
+    enforced    INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (repo, comment_key)
+);
+CREATE INDEX IF NOT EXISTS review_comments_enforced
+    ON review_comments (repo, enforced, created_at);
+
+-- Where each repository's review-history harvest has got to, and how its norms
+-- were last derived. One row per repository.
+CREATE TABLE IF NOT EXISTS brain_state (
+    repo              TEXT PRIMARY KEY,
+    harvested_through TEXT NOT NULL DEFAULT '',
+    prs_seen          INTEGER NOT NULL DEFAULT 0,
+    built_at          REAL NOT NULL DEFAULT 0,
+    clustered_by      TEXT NOT NULL DEFAULT '',
+    named_by          TEXT NOT NULL DEFAULT '',
+    note              TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS atlases (

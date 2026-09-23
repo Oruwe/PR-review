@@ -14,6 +14,7 @@ from pathlib import Path
 
 import structlog
 
+from prflagger.brain.keeper import BrainKeeper
 from prflagger.charter.keeper import CharterKeeper
 from prflagger.core.config import Config, load
 from prflagger.engine.janitor import disk_free_ratio, sweep
@@ -48,8 +49,10 @@ class Service:
     github: GitHub
     notifier: Notifier
     keeper: CharterKeeper
+    brain: BrainKeeper
     started: bool = False
     janitor: asyncio.Task[None] | None = None
+    learner: asyncio.Task[None] | None = None
     _background: set[asyncio.Task[object]] = field(default_factory=set)
 
     @classmethod
@@ -65,27 +68,46 @@ class Service:
         github = GitHub()
         keeper = CharterKeeper(config, store, bus, notifier)
         watcher = Watcher(config, store, bus, scheduler, github, keeper=keeper)
+        brain = BrainKeeper(config, store, bus)
         return cls(
             config=config, db=db, store=store, bus=bus, pool=pool, worker=worker,
             scheduler=scheduler, watcher=watcher, github=github, notifier=notifier,
-            keeper=keeper,
+            keeper=keeper, brain=brain,
         )
 
     def remember(self, slug: str) -> None:
-        """Build a repository's first charter in the background, if it has none.
+        """Read a repository in the background if the service has no memory of it.
 
-        A repository the service has no memory of cannot have its pull requests
-        judged against what it is for, so a new one is read immediately rather
-        than on the next branch movement.
+        A repository with no charter cannot have its pull requests judged against
+        what it is for, and one with no norms cannot have them judged against what
+        its reviewers enforce, so a new one is read immediately — charter first,
+        then review history — rather than on the next branch movement or daily
+        refresh.
         """
         repo = self.store.repo(slug)
-        if repo is None or repo.charter_sha:
+        if repo is None or (repo.charter_sha and not self.brain.due(slug)):
             return
-        task = asyncio.create_task(
-            self.keeper.refresh(slug, reason="first reading"), name=f"pf-charter-{slug}"
-        )
+        task = asyncio.create_task(self._first_reading(slug), name=f"pf-remember-{slug}")
         self._background.add(task)
         task.add_done_callback(self._background.discard)
+
+    async def _first_reading(self, slug: str) -> None:
+        repo = self.store.repo(slug)
+        if repo is not None and not repo.charter_sha:
+            await self.keeper.refresh(slug, reason="first reading")
+        await self.brain.refresh(slug, reason="first reading")
+
+    async def _learn_periodically(self, every_s: float = 900.0) -> None:
+        """Keep every repository's norms current. Cheap when nothing is due."""
+        while True:
+            await asyncio.sleep(every_s)
+            for repo in self.store.repos():
+                try:
+                    await self.brain.refresh(repo.slug, reason="scheduled")
+                except asyncio.CancelledError:
+                    return
+                except Exception:  # noqa: BLE001 - one repository must not stop the rest
+                    log.exception("brain.scheduled_failed", repo=repo.slug)
 
     async def start(self, *, watch: bool = True) -> None:
         """Bring the engine up, repairing anything the last shutdown left behind."""
@@ -95,6 +117,7 @@ class Service:
         if watch:
             await self.watcher.start()
         self.janitor = asyncio.create_task(self._sweep_periodically(), name="pf-janitor")
+        self.learner = asyncio.create_task(self._learn_periodically(), name="pf-brain")
         for repo in self.store.repos():
             self.remember(repo.slug)
         self.started = True
@@ -115,10 +138,12 @@ class Service:
     async def stop(self) -> None:
         for task in list(self._background):
             task.cancel()
-        if self.janitor is not None:
-            self.janitor.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self.janitor
+        for loop_task in (self.janitor, self.learner):
+            if loop_task is not None:
+                loop_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await loop_task
+        self.brain.close()
         await self.watcher.stop()
         await self.scheduler.stop()
         self.started = False

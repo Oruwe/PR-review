@@ -25,7 +25,7 @@ from prflagger.api.service import Service
 from prflagger.api.ws import stream_events
 from prflagger.core.config import Config, cache_root
 from prflagger.core.errors import RepoUnavailable
-from prflagger.core.models import Repo, RunState
+from prflagger.core.models import Norm, Repo, RunState
 from prflagger.engine.states import ORDER, progress_of
 from prflagger.probes.differential import SEVERITY
 
@@ -136,6 +136,7 @@ def create_app(
                 "repo": repo, "atlas": atlas, "pulls": built.store.pulls(slug),
                 "charter": built.store.charter(slug),
                 "changes": built.store.charter_changes(slug, limit=3),
+                "brain": _brain_payload(built, slug),
             },
         )
 
@@ -273,6 +274,24 @@ def create_app(
             "standards": list(charter.standards),
             "history": built.store.charter_history(slug),
         }
+
+    @app.get("/api/repos/{owner}/{name}/norms")
+    async def get_norms(owner: str, name: str) -> Any:
+        slug = f"{owner}/{name}"
+        if built.store.repo(slug) is None:
+            raise HTTPException(404, f"{slug} is not being watched")
+        return _brain_payload(built, slug)
+
+    @app.post("/api/repos/{owner}/{name}/norms")
+    async def relearn(owner: str, name: str) -> Any:
+        """Read new review history now and mine the norms again."""
+        slug = f"{owner}/{name}"
+        if built.store.repo(slug) is None:
+            raise HTTPException(404, f"{slug} is not being watched")
+        learned = await built.brain.refresh(slug, reason="requested", force=True)
+        if learned is None:
+            raise HTTPException(502, "the review history could not be read; see the log")
+        return learned.__dict__
 
     @app.get("/api/repos/{owner}/{name}/changes")
     async def get_changes(owner: str, name: str) -> Any:
@@ -454,6 +473,40 @@ def _queue_rows(service: Service, slug: str) -> list[dict[str, Any]]:
     return sorted(rows, key=lambda r: (-r["risk"], -r["findings"], -r["number"]))
 
 
+def _norm_dict(norm: Norm) -> dict[str, Any]:
+    return {
+        "id": norm.id, "statement": norm.statement, "source": norm.source,
+        "support": norm.support, "distinct_reviewers": norm.distinct_reviewers,
+        "confidence": norm.confidence, "evidence_prs": list(norm.evidence_prs),
+        "quote": norm.quote,
+        "evidence": [
+            {"pr": pr, "url": url, "where": where} for pr, url, where in norm.evidence
+        ],
+        "clustered_by": norm.clustered_by, "named_by": norm.named_by,
+    }
+
+
+def _brain_payload(service: Service, slug: str) -> dict[str, Any]:
+    """What this repository holds itself to, and how the service knows."""
+    seen, kept = service.store.review_counts(slug)
+    state = service.store.brain_state(slug) or {}
+    norms = service.store.norms(slug)
+    return {
+        "repo": slug,
+        "declared": [_norm_dict(n) for n in norms if n.source == "declared"],
+        "mined": [_norm_dict(n) for n in norms if n.source == "mined"],
+        "comments_seen": seen,
+        "comments_enforced": kept,
+        "retention": round(kept / seen, 3) if seen else None,
+        "pulls_read": int(state.get("prs_seen") or 0),
+        "built_at": state.get("built_at") or None,
+        "clustered_by": state.get("clustered_by", ""),
+        "named_by": state.get("named_by", ""),
+        "note": state.get("note", ""),
+        "on_github": service.brain.on_github(slug),
+    }
+
+
 def _report_payload(service: Service, run_id: str) -> dict[str, Any]:
     run = service.store.run(run_id)
     assert run is not None  # noqa: S101 - callers check first
@@ -472,6 +525,7 @@ def _report_payload(service: Service, run_id: str) -> dict[str, Any]:
                 "signals": event.payload.get("signals", []),
             }
 
+    norms = {n.id: n for n in service.store.norms(run.repo)}
     findings = []
     for observation in observations:
         adjudication = adjudications.get(observation.id)
@@ -491,6 +545,7 @@ def _report_payload(service: Service, run_id: str) -> dict[str, Any]:
                 "rank_score": observation.rank_score,
                 "relevance": observation.relevance,
                 "relevance_note": observation.relevance_note,
+                "norm": _norm_dict(norm) if (norm := norms.get(observation.norm_id)) else None,
                 "adjudication": (
                     {
                         "assessment": adjudication.assessment,

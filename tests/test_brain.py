@@ -8,10 +8,12 @@ SPEC.md § C6: output is a strict subset of all review comments; every kept comm
 at least one later commit on its PR; comments on unmerged PRs are absent. Log the
 retention rate.
 
-The live fetch cannot run here: `gh` is not installed and this session has no GitHub API
-access to the target repo, so the ">= 100 PRs" half of C5 is UNMET, not relaxed. The
-cache-first half is tested for real. C6 is a pure filter and is tested against a corpus
-in GitHub's own response shape.
+Harvesting goes through `vcs.github.GitHub` over REST (v1 needed the `gh` CLI).
+The ">= 100 PRs" half of C5 needs API access to the target repository, which this
+session's scoping denies, so it is UNMET, not relaxed. The cache-first half is
+tested for real, and the REST path is tested against a local server serving
+GitHub-shaped payloads and, when reachable, against a live repository. C6 is a
+pure filter and is tested against a corpus in GitHub's own response shape.
 """
 
 from __future__ import annotations
@@ -22,9 +24,11 @@ from pathlib import Path
 
 import pytest
 
-from prflagger.brain import harvest as harvest_module
 from prflagger.brain.enforce import enforced_comments, retention_rate
-from prflagger.brain.harvest import GhUnavailable, harvest, prs_path
+from prflagger.brain.harvest import HarvestUnavailable, harvest, prs_path
+from prflagger.vcs.github import GitHub
+from tests import github_fixture as gh
+from tests.github_fixture import RecordedGitHub, serve
 
 CORPUS = Path(__file__).resolve().parent / "fixtures" / "prs_corpus.json"
 
@@ -40,34 +44,49 @@ def isolated_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 # --------------------------------------------------------------------------------------
 
 
-def test_a_cached_harvest_makes_zero_network_requests(
-    isolated_cache: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    calls: list[list[str]] = []
-
-    def counting(argv: list[str]):  # type: ignore[no-untyped-def]
-        calls.append(argv)
-        raise AssertionError("harvest must not reach the network when cached")
-
-    monkeypatch.setattr(harvest_module, "_gh", counting)
-
+def test_a_cached_harvest_makes_zero_network_requests(isolated_cache: Path) -> None:
     path = prs_path("pallets/click")
     path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(CORPUS, path)
 
-    returned = harvest("pallets/click")
+    # A client pointed at a port nothing listens on: any request would fail loudly.
+    client = GitHub(token="", base_url="http://127.0.0.1:9")
+    returned = harvest("pallets/click", github=client)
 
     assert returned == path
-    assert calls == [], "a second harvest must be served from disk"
+    assert client.requests_made == 0, "a second harvest must be served from disk"
     assert json.loads(returned.read_text(encoding="utf-8"))
 
 
-def test_harvest_says_why_when_gh_is_missing(
-    isolated_cache: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr(harvest_module.shutil, "which", lambda _: None)
-    with pytest.raises(GhUnavailable, match="gh CLI"):
-        harvest("pallets/click")
+def test_harvest_says_why_when_github_refuses(isolated_cache: Path) -> None:
+    recorded = RecordedGitHub(
+        statuses={"/repos/acme/lib/pulls": (403, "API rate limit exceeded for 1.2.3.4")}
+    )
+    with serve(recorded):
+        client = GitHub(token="", base_url=recorded.base_url)
+        with pytest.raises(HarvestUnavailable, match="rate limit"):
+            harvest("acme/lib", github=client)
+    assert not prs_path("acme/lib").exists(), "a failed harvest must not cache nothing"
+
+
+def test_a_harvest_fetches_only_merged_pull_requests(isolated_cache: Path) -> None:
+    recorded = RecordedGitHub(routes={
+        "/repos/acme/lib/pulls": [gh.pull(3), gh.pull(2, merged=False), gh.pull(1)],
+        "/repos/acme/lib/pulls/3/comments": [
+            gh.comment(30, "Add a test.", user="rev", at="2026-01-01T00:00:00Z")
+        ],
+        "/repos/acme/lib/pulls/3/commits": [gh.commit("2026-01-02T00:00:00Z")],
+        "/repos/acme/lib/pulls/1/comments": [],
+        "/repos/acme/lib/pulls/1/commits": [gh.commit("2026-01-02T00:00:00Z")],
+    })
+    with serve(recorded):
+        path = harvest("acme/lib", github=GitHub(token="", base_url=recorded.base_url))
+    records = json.loads(path.read_text(encoding="utf-8"))
+    assert [r["number"] for r in records] == [3, 1]
+    assert recorded.pages_served("/repos/acme/lib/pulls/2/comments") == 0, (
+        "an unmerged pull request enforced nothing, so its comments are not worth a request"
+    )
+    assert records[0]["review_comments"][0]["body"] == "Add a test."
 
 
 # --------------------------------------------------------------------------------------

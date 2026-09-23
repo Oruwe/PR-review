@@ -14,7 +14,6 @@ from typing import Any
 
 import pytest
 
-from prflagger.brain import harvest as harvest_module
 from prflagger.brain import norms as norms_module
 from prflagger.brain.norms import (
     SIMILARITY_THRESHOLD,
@@ -25,6 +24,8 @@ from prflagger.brain.norms import (
     profile_path,
     write_profile,
 )
+from prflagger.vcs.github import GitHub, GitHubError
+from tests.github_fixture import RecordedGitHub, pull, serve
 
 # Two clearly separated directions, plus a third far from both.
 TESTY = [1.0, 0.0, 0.0]
@@ -226,40 +227,38 @@ def test_profile_round_trips(head_worktree: Path, tmp_path: Path) -> None:
 # --------------------------------------------------------------------------------------
 
 
-def test_paged_concatenates_the_pages_gh_returns(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`gh api --paginate` emits one JSON array per page, back to back."""
-    pages = json.dumps([{"number": 1}, {"number": 2}]) + json.dumps([{"number": 3}])
-
-    def fake(argv: list[str]):  # type: ignore[no-untyped-def]
-        import subprocess
-
-        return subprocess.CompletedProcess(argv, 0, pages, "")
-
-    monkeypatch.setattr(harvest_module, "_gh", fake)
-    items = harvest_module._paged("repos/x/y/pulls", {}, 10)
-    assert [item["number"] for item in items] == [1, 2, 3]
+def test_paged_follows_pages_until_the_api_runs_out() -> None:
+    recorded = RecordedGitHub(routes={"/items": [{"n": n} for n in range(7)]})
+    with serve(recorded):
+        client = GitHub(token="", base_url=recorded.base_url)
+        items = client.paged("/items", limit=100)
+    assert [item["n"] for item in items] == list(range(7))
 
 
-def test_paged_respects_the_limit(monkeypatch: pytest.MonkeyPatch) -> None:
-    pages = json.dumps([{"number": n} for n in range(10)])
-
-    def fake(argv: list[str]):  # type: ignore[no-untyped-def]
-        import subprocess
-
-        return subprocess.CompletedProcess(argv, 0, pages, "")
-
-    monkeypatch.setattr(harvest_module, "_gh", fake)
-    assert len(harvest_module._paged("repos/x/y/pulls", {}, 4)) == 4
+def test_paged_respects_the_limit() -> None:
+    recorded = RecordedGitHub(routes={"/items": [{"n": n} for n in range(250)]})
+    with serve(recorded):
+        client = GitHub(token="", base_url=recorded.base_url)
+        items = client.paged("/items", limit=120)
+    assert len(items) == 120
+    assert recorded.pages_served("/items") == 2, "120 items at 100 per page is two pages"
 
 
-def test_paged_reports_a_failure_instead_of_returning_nothing(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    def fake(argv: list[str]):  # type: ignore[no-untyped-def]
-        import subprocess
+def test_paged_stops_at_what_was_already_seen() -> None:
+    """The incremental harvest: newest first, stop at the last one recorded."""
+    stamps = [f"2026-01-{day:02d}T00:00:00Z" for day in range(28, 0, -1)]
+    recorded = RecordedGitHub(routes={
+        "/repos/acme/lib/pulls": [pull(n, updated=stamp) for n, stamp in enumerate(stamps)]
+    })
+    with serve(recorded):
+        client = GitHub(token="", base_url=recorded.base_url)
+        fresh = client.closed_pulls("acme/lib", since="2026-01-25T00:00:00Z")
+    assert [p["updated_at"] for p in fresh] == stamps[:3]
 
-        return subprocess.CompletedProcess(argv, 1, "", "HTTP 403 rate limit exceeded")
 
-    monkeypatch.setattr(harvest_module, "_gh", fake)
-    with pytest.raises(harvest_module.GhUnavailable, match="403"):
-        harvest_module._paged("repos/x/y/pulls", {}, 10)
+def test_paged_reports_a_failure_instead_of_returning_nothing() -> None:
+    recorded = RecordedGitHub(statuses={"/items": (403, "API rate limit exceeded")})
+    with serve(recorded):
+        client = GitHub(token="", base_url=recorded.base_url)
+        with pytest.raises(GitHubError, match="rate limit"):
+            client.paged("/items")

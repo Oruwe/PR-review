@@ -32,7 +32,7 @@ __all__ = [
 log = structlog.get_logger(__name__)
 
 #: Bumped when `schema.sql` changes in a way an existing database needs applied.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 #: Columns added after a table first shipped. `CREATE TABLE IF NOT EXISTS` cannot
 #: add a column to a table that already exists, so a database created by an
@@ -45,6 +45,11 @@ _ADDED_COLUMNS: tuple[tuple[int, str, str, str], ...] = (
     (2, "runs", "charter_impact", "TEXT NOT NULL DEFAULT ''"),
     (2, "observations", "relevance", "TEXT NOT NULL DEFAULT ''"),
     (2, "observations", "relevance_note", "TEXT NOT NULL DEFAULT ''"),
+    (3, "norms", "source", "TEXT NOT NULL DEFAULT 'mined'"),
+    (3, "norms", "quote", "TEXT NOT NULL DEFAULT ''"),
+    (3, "norms", "evidence", "TEXT NOT NULL DEFAULT '[]'"),
+    (3, "norms", "clustered_by", "TEXT NOT NULL DEFAULT ''"),
+    (3, "norms", "named_by", "TEXT NOT NULL DEFAULT ''"),
 )
 
 _SCHEMA_PATH = Path(__file__).with_name("schema.sql")

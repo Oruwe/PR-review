@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 __all__ = [
+    "BrainConfig",
     "BudgetConfig",
     "CharterConfig",
     "Config",
@@ -127,6 +128,25 @@ class CharterConfig:
 
 
 @dataclass(frozen=True)
+class BrainConfig:
+    """How much review history to read, and how often.
+
+    Each merged pull request costs three API requests (listed, comments,
+    commits). Without a token GitHub allows sixty an hour, so an unauthenticated
+    first harvest reads only a handful and says so rather than stalling the
+    watcher for an hour.
+    """
+
+    harvest_limit: int = 200  # closed PRs examined on a repository's first harvest
+    incremental_limit: int = 100  # at most this many per refresh after that
+    unauthenticated_limit: int = 15
+    refresh_hours: float = 24.0
+    min_support: int = 3  # comments behind a mined norm
+    min_reviewers: int = 2  # distinct people behind it
+    max_comments: int = 1500  # newest enforced comments considered when mining
+
+
+@dataclass(frozen=True)
 class ServerConfig:
     """The web surface."""
 
@@ -151,6 +171,7 @@ class Config:
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     server: ServerConfig = field(default_factory=ServerConfig)
     charter: CharterConfig = field(default_factory=CharterConfig)
+    brain: BrainConfig = field(default_factory=BrainConfig)
     source: Path | None = None
 
     def repo(self, slug: str) -> RepoConfig:
@@ -242,5 +263,6 @@ def load(path: Path | str = "config.toml") -> Config:
         sandbox=_build(SandboxConfig, _section(data, "sandbox")),
         server=_build(ServerConfig, _section(data, "server")),
         charter=_build(CharterConfig, _section(data, "charter")),
+        brain=_build(BrainConfig, _section(data, "brain")),
         source=source,
     )
