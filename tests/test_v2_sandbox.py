@@ -125,6 +125,37 @@ def test_memory_is_measured_not_guessed() -> None:
 
 
 @needs_docker
+def test_a_container_that_is_slow_to_start_is_still_measured() -> None:
+    """`docker inspect` answers once a container is created; its cgroup appears
+    only once it starts. A sampler that looked once in that gap recorded nothing,
+    which is how this failed on a loaded CI runner. Here the gap is forced: the
+    container is created, then started a second and a half later.
+    """
+    import subprocess
+
+    from prflagger.sandbox.stream import run_streaming
+
+    name = f"pf-test-late-{int(time.time() * 1000)}"
+    subprocess.run(  # noqa: S603
+        ["docker", "create", "--rm", "--name", name, "--network=none", "--memory=512m",
+         IMAGE, "python", "-c",
+         "x = bytearray(150 * 1024 * 1024)\nimport time; time.sleep(2)\nprint(len(x))"],
+        check=True, capture_output=True,
+    )
+
+    async def scenario() -> tuple[int | None, int]:
+        result = await run_streaming(
+            ["sh", "-c", f"sleep 1.5; exec docker start -a {name}"],
+            timeout_s=90, container_name=name, sample_interval_s=0.3,
+        )
+        return result.peak_rss_mb, result.samples
+
+    peak, samples = asyncio.run(scenario())
+    assert samples > 0, "the sampler gave up before the container started"
+    assert peak is not None and peak >= 140, f"a 150 MB allocation reported {peak} MB"
+
+
+@needs_docker
 def test_a_runaway_job_times_out_and_leaves_nothing_behind() -> None:
     """SPEC.md § C1: a timeout is a finding, not an error — and must not leak."""
     from prflagger.sandbox.stream import run_streaming

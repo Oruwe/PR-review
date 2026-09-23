@@ -121,9 +121,14 @@ def _offset(started: float) -> int:
     return int((time.monotonic() - started) * 1000)
 
 
-async def _container_id(name: str) -> str | None:
-    """Resolve a container name to its full id, retrying while it starts."""
-    for _ in range(20):
+async def _container_id(name: str, deadline_s: float = 60.0) -> str | None:
+    """Resolve a container name to its full id, retrying while it is created.
+
+    Bounded by time, not attempts: on a loaded host each `docker inspect` can
+    take far longer than the pause between them.
+    """
+    give_up = time.monotonic() + deadline_s
+    while time.monotonic() < give_up:
         try:
             process = await asyncio.create_subprocess_exec(
                 "docker", "inspect", "-f", "{{.Id}}", name,
@@ -136,6 +141,26 @@ async def _container_id(name: str) -> str | None:
         if cid:
             return cid
         await asyncio.sleep(0.1)
+    return None
+
+
+async def _probe_when_started(cid: str, poll: float, deadline_s: float = 60.0
+                              ) -> ContainerProbe | None:
+    """A probe for the container once its cgroup exists.
+
+    `docker inspect` answers as soon as a container is *created*, but its cgroup
+    only exists once it has *started*. Probing once in that gap finds nothing,
+    and on a slow host the gap is long enough to be hit — which left a run with
+    no memory reading at all. So keep looking until it appears; the caller
+    cancels this when the process ends, and a container that never starts
+    simply produces no reading.
+    """
+    give_up = time.monotonic() + deadline_s
+    while time.monotonic() < give_up:
+        probe = ContainerProbe(cid)
+        if probe.available:
+            return probe
+        await asyncio.sleep(poll / 2)
     return None
 
 
@@ -154,16 +179,15 @@ async def sample_container(
     worth failing a run over, and the report says memory was not measured rather
     than inventing a number.
     """
-    cid = await _container_id(name)
-    if cid is None:
-        return
-    probe = ContainerProbe(cid)
-    if not probe.available:
-        return
-
     # Poll faster than the UI needs so a job lasting under a second still
     # produces at least one reading.
     poll = max(0.1, min(interval_s, 0.25))
+    cid = await _container_id(name)
+    if cid is None:
+        return
+    probe = await _probe_when_started(cid, poll)
+    if probe is None:
+        return
     emit_every = max(1, int(interval_s / poll))
     tick = 0
     try:
