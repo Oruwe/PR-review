@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}PR Flagger{% endblock %}</title>
+<link rel="stylesheet" href="/static/css/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9873;</text></svg>">
+<script>
+  /* Applied before first paint so a dark-mode reload never flashes light. */
+  try {
+    var t = localStorage.getItem("pf-theme");
+    if (t) document.documentElement.setAttribute("data-theme", t);
+  } catch (e) { /* private mode: the OS preference still applies */ }
+</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">
+    <svg width="17" height="17" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+      <path d="M3 1v14M3 2h9l-2 3 2 3H3" stroke="currentColor" stroke-width="1.7"
+            stroke-linejoin="round" stroke-linecap="round"/>
+    </svg>
+    PR Flagger
+  </a>
+  <nav>{% block nav %}{% endblock %}</nav>
+  <span class="spacer"></span>
+  <span class="pill" id="conn" hidden>offline</span>
+  <button id="theme" title="Switch between light and dark" aria-label="Switch theme">◐</button>
+</header>
+
+<main class="wrap">{% block content %}{% endblock %}</main>
+
+<div class="tooltip" id="tip" role="status" aria-live="polite"></div>
+<script type="module" src="/static/js/app.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

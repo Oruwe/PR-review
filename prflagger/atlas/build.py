@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -112,12 +113,27 @@ def _structure(
     edges: dict[str, set[str]] = {}
     for root in roots:
         try:
-            symbols.update(index_symbols(root))
+            # Repo-relative, or module attribution falls into a `/tmp/...` bucket
+            # and every real module reports zero symbols.
+            symbols.update(
+                {
+                    fqn: replace(symbol, file=_relative(symbol.file, repo_path))
+                    for fqn, symbol in index_symbols(root).items()
+                }
+            )
             for caller, callees in build_call_graph(root).items():
                 edges.setdefault(caller, set()).update(callees)
         except (OSError, RecursionError, ValueError) as error:
             log.warning("atlas.structure_failed", root=str(root), error=str(error)[:200])
     return symbols, edges
+
+
+def _relative(path: str, repo_path: Path) -> str:
+    """Repo-relative posix, so a path means the same thing on any machine."""
+    try:
+        return Path(path).relative_to(repo_path).as_posix()
+    except ValueError:
+        return path
 
 
 def _infer_roots(repo_path: Path) -> list[Path]:
@@ -172,12 +188,8 @@ def _modules(
     by_file: dict[str, int] = defaultdict(int)
     for symbol in symbols.values():
         by_file[module_of(symbol.file)] += 1
-    # Symbol paths are absolute while inventory paths are repo-relative; match on
-    # the module suffix so both spellings land on the same row.
     for name, entry in grouped.items():
-        entry["symbols"] = by_file.get(name, 0) or sum(
-            count for key, count in by_file.items() if key.endswith(name)
-        )
+        entry["symbols"] = by_file.get(name, 0)
 
     out: list[dict[str, Any]] = []
     for entry in grouped.values():

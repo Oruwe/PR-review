@@ -48,6 +48,7 @@ class Watcher:
         self._github = github or GitHub()
         self._task: asyncio.Task[None] | None = None
         self._stopping = False
+        self._unpollable: set[str] = set()
         self.last_poll_at: float | None = None
         self.polls = 0
 
@@ -84,6 +85,13 @@ class Watcher:
         for repo in self._store.repos():
             entry = self._config.repo(repo.slug)
             if not entry.watch:
+                continue
+            if entry.clone_url and not entry.clone_url.startswith("https://github.com/"):
+                # Cloned from somewhere GitHub does not know about, so there is
+                # no pull-request list to poll. Runs for it start on request.
+                if repo.slug not in self._unpollable:
+                    self._unpollable.add(repo.slug)
+                    log.info("watcher.not_on_github", repo=repo.slug, source=entry.clone_url)
                 continue
             queued += await self._poll_repo(repo.slug, entry.max_prs)
         self.polls += 1

@@ -1,8 +1,11 @@
 """Command line entry points.
 
+    prflagger serve [--host H] [--port P] [--no-watch]
+    prflagger watch --repo <slug>
     prflagger brain build --repo <slug>
     prflagger check --repo <path> --base <sha> --head <sha> --out report.html
     prflagger norms --repo <slug>
+    prflagger gc [--days N]
 
 This module is the only place that prints.
 """
@@ -13,6 +16,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -60,6 +64,20 @@ def main(argv: list[str] | None = None) -> int:
     norms = sub.add_parser("norms", help="print learned norms with evidence")
     norms.add_argument("--repo", required=True, help="owner/name")
 
+    serve = sub.add_parser("serve", help="run the service and its web interface")
+    serve.add_argument("--host", default="")
+    serve.add_argument("--port", type=int, default=0)
+    serve.add_argument(
+        "--no-watch", action="store_true", help="do not poll GitHub; run only on request"
+    )
+    serve.add_argument("--reload", action="store_true", help="reload on code changes")
+
+    watch = sub.add_parser("watch", help="start watching a repository")
+    watch.add_argument("--repo", required=True, help="owner/name")
+
+    collect = sub.add_parser("gc", help="drop old events and unreferenced cache entries")
+    collect.add_argument("--days", type=int, default=0, help="keep this many days of events")
+
     args = parser.parse_args(argv)
     _configure_logging()
 
@@ -67,7 +85,107 @@ def main(argv: list[str] | None = None) -> int:
         return _brain_build(args.repo, args.limit)
     if args.command == "check":
         return _check(args.repo, args.base, args.head, args.out)
+    if args.command == "serve":
+        return _serve(args.host, args.port, watch=not args.no_watch, reload=args.reload)
+    if args.command == "watch":
+        return _watch(args.repo)
+    if args.command == "gc":
+        return _gc(args.days)
     return _norms(args.repo)
+
+
+# ----------------------------------------------------------------------------------
+# serve / watch / gc
+# ----------------------------------------------------------------------------------
+
+
+def _serve(host: str, port: int, *, watch: bool, reload: bool) -> int:
+    """Run the always-on service. This is the main entry point for v2."""
+    import uvicorn
+
+    from prflagger.api.app import create_app
+    from prflagger.api.service import Service
+    from prflagger.core.config import load
+
+    config = load()
+    bind_host = host or config.server.host
+    bind_port = port or config.server.port
+
+    service = Service.build(config)
+    for entry in config.repos:
+        if service.store.repo(entry.slug) is None:
+            from prflagger.core.models import Repo
+
+            service.store.put_repo(
+                Repo(
+                    slug=entry.slug,
+                    default_branch=entry.default_branch,
+                    package_roots=tuple(entry.package_roots),
+                    added_at=time.time(),
+                )
+            )
+
+    print(f"PR Flagger on http://{bind_host}:{bind_port}")
+    print(f"  watching {len(config.repos)} configured repo(s); "
+          f"{service.pool.capacity} sandbox slot(s)")
+    if not service.github.authenticated:
+        print("  note: no GitHub token found — public repos only, 60 calls/hour")
+    if not watch:
+        print("  polling disabled; runs start only when you ask for them")
+
+    app = create_app(service, config=config, watch=watch)
+    uvicorn.run(app, host=bind_host, port=bind_port, log_level="warning")
+    return 0
+
+
+def _watch(slug: str) -> int:
+    """Record a repository so the service starts polling it."""
+    from prflagger.api.service import Service
+    from prflagger.core.models import Repo
+
+    service = Service.build()
+    entry = service.config.repo(slug)
+    try:
+        branch = (
+            entry.default_branch if entry.clone_url else service.github.default_branch(slug)
+        )
+    except Exception as error:  # noqa: BLE001 - report, do not traceback
+        print(f"could not reach {slug}: {_reason(error)}", file=sys.stderr)
+        return 1
+    service.store.put_repo(
+        Repo(
+            slug=slug, default_branch=branch,
+            package_roots=tuple(entry.package_roots), added_at=time.time(),
+        )
+    )
+    print(f"watching {slug} (default branch {branch})")
+    return 0
+
+
+def _gc(days: int) -> int:
+    """Drop old events and cached job results. Disk is finite."""
+    import shutil
+
+    from prflagger.api.service import Service
+
+    service = Service.build()
+    retention = days or service.config.server.event_retention_days
+    removed = service.bus.prune(retention)
+    print(f"events pruned: {removed} (kept {retention} days)")
+
+    root = cache_root()
+    freed = 0
+    live = {run.id for run in service.store.runs(limit=10_000)}
+    transcripts = root / "runs"
+    if transcripts.is_dir():
+        for directory in transcripts.iterdir():
+            if directory.is_dir() and directory.name not in live:
+                freed += sum(f.stat().st_size for f in directory.rglob("*") if f.is_file())
+                shutil.rmtree(directory, ignore_errors=True)
+    print(f"orphaned transcripts removed: {freed // 1024} KB")
+    service.db.execute("VACUUM")
+    print("database vacuumed")
+    return 0
 
 
 # ----------------------------------------------------------------------------------

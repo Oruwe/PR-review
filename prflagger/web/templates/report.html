@@ -1,0 +1,186 @@
+{% extends "base.html" %}
+{% block title %}Report — {{ run.repo }}#{{ run.pr }} — PR Flagger{% endblock %}
+{% block nav %}
+  <a href="/repo/{{ run.repo }}">Map</a>
+  <a href="/repo/{{ run.repo }}/prs">Pull requests</a>
+  <a href="/runs/{{ run.id }}">Run</a>
+  <a href="/runs/{{ run.id }}/report" aria-current="page">Report</a>
+{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>{% if pull %}#{{ pull.number }} {{ pull.title }}{% else %}Run {{ run.id }}{% endif %}</h1>
+    <p class="subtle">
+      {{ run.repo }} · <code>{{ run.base_sha[:8] }}</code> → <code>{{ run.head_sha[:8] }}</code>
+      {% if run.duration_s %} · verified in {{ run.duration_s }}s{% endif %}
+    </p>
+  </div>
+  <span class="spacer"></span>
+  <a class="button" href="/runs/{{ run.id }}">Watch the run</a>
+</div>
+
+<div class="notice" style="margin-bottom:18px">
+  <span class="ico" aria-hidden="true">ℹ</span>
+  <div>These are observations, not a verdict. Nothing here says approve or reject &mdash;
+    each item states what changed, how we know, and what in this repository makes it matter.
+    Judgement is yours.</div>
+</div>
+
+<div class="stats" style="margin-bottom:20px">
+  <div class="stat">
+    <div class="value">{{ findings|length }}</div>
+    <div class="label">Observations</div>
+  </div>
+  {% for kind, n in counts.items() %}
+  <div class="stat">
+    <div class="value">{{ n }}</div>
+    <div class="label">{{ KIND_LABEL.get(kind, kind) }}</div>
+  </div>
+  {% endfor %}
+  <div class="stat">
+    <div class="value">{{ jobs|length }}</div>
+    <div class="label">Sandbox jobs</div>
+  </div>
+</div>
+
+<div class="card" style="margin-bottom:18px">
+  <header>
+    <h2>What was verified</h2>
+    <span class="spacer"></span>
+    {% if coverage.complete %}
+      <span class="chip good"><span class="dot"></span>complete</span>
+    {% else %}
+      <span class="chip warning"><span class="dot"></span>partial</span>
+    {% endif %}
+  </header>
+  <p class="subtle" style="margin:-6px 0 12px">Partial verification is never presented as
+    complete. Everything this run could not check is listed, with the reason.</p>
+  <ul class="marks">
+    {% for v in coverage.verified %}
+      <li style="color:var(--good-ink)"><span aria-hidden="true">✓</span>
+        <span style="color:var(--ink)">{{ v }}</span></li>
+    {% endfor %}
+    {% for s in coverage.skipped %}
+      <li><span aria-hidden="true" style="color:var(--warning)">⚠</span>
+        <strong>{{ s.what }}</strong> &mdash; <span class="subtle">{{ s.why }}</span></li>
+    {% endfor %}
+  </ul>
+</div>
+
+{% if findings %}
+  {% for f in findings %}
+  <article class="finding {{ f.status }}" id="{{ f.id }}">
+    <header>
+      <span class="chip {{ f.status }}"><span class="dot"></span>{{ f.label }}</span>
+      <span class="sym">{{ f.symbol }}</span>
+      <span class="spacer" style="flex:1"></span>
+      <span class="subtle" style="font-size:.76rem">
+        rank {{ "%.3f"|format(f.rank_score) }} ·
+        severity {{ "%.1f"|format(f.severity) }} ·
+        confidence {{ "%.0f"|format(f.confidence * 100) }}%
+      </span>
+    </header>
+
+    <dl class="contract">
+      <dt>What changed</dt>
+      <dd>{{ f.what_changed }}</dd>
+
+      <dt>How we know</dt>
+      <dd>
+        {{ f.how_we_know }}
+        {% if f.evidence_ref %}<div class="evidence" style="margin-top:6px">{{ f.evidence_ref }}</div>{% endif %}
+      </dd>
+
+      <dt>Repo standard</dt>
+      <dd>
+        {% if f.adjudication %}
+          <strong>{{ f.adjudication.assessment|replace('_',' ') }}</strong>
+          &mdash; {{ f.adjudication.reasoning }}
+          <div style="margin-top:6px">
+            {% for c in f.adjudication.citations %}
+              <span class="citation" title="{{ c.quote }}">{{ c.type }}: {{ c.ref }}</span>
+            {% endfor %}
+          </div>
+        {% elif f.kind == 'behavior_change' %}
+          <span class="subtle">Not required. A behaviour change is a fact about the program
+            on its own &mdash; no repository standard has to make it matter.</span>
+        {% else %}
+          <span class="subtle">Not adjudicated: no model provider was configured for this
+            run, so this observation ships as the mechanical fact it is.</span>
+        {% endif %}
+      </dd>
+
+      <dt>Confidence</dt>
+      <dd>
+        <div style="display:flex;align-items:center;gap:9px">
+          <div class="bar" style="width:120px">
+            <span style="width:{{ (f.confidence*100)|round }}%;background:var(--seq-400)"></span>
+          </div>
+          <span class="subtle">{{ "%.0f"|format(f.confidence * 100) }}%</span>
+        </div>
+      </dd>
+    </dl>
+
+    {% if f.suggestion %}
+    <div class="notice" style="margin-top:12px">
+      <span class="ico" aria-hidden="true">→</span>
+      <div>
+        <strong>{{ f.suggestion.summary }}</strong>
+        <div class="subtle" style="margin-top:3px">{{ f.suggestion.rationale }}</div>
+        {% if f.suggestion.patch_sketch %}
+          <pre class="evidence" style="margin-top:8px;white-space:pre">{{ f.suggestion.patch_sketch }}</pre>
+        {% endif %}
+        <div style="margin-top:6px">
+          {% for c in f.suggestion.citations %}
+            <span class="citation">{{ c.type }}: {{ c.ref }}</span>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+  </article>
+  {% endfor %}
+{% else %}
+<div class="card empty">
+  <h3>Nothing flagged</h3>
+  <p class="subtle">Every probe that ran found no difference between the two commits.
+    Read the coverage statement above for what was and was not checked.</p>
+</div>
+{% endif %}
+
+<div class="card" style="margin-top:18px">
+  <header><h2>How this was run</h2></header>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>Stage</th><th>Outcome</th><th class="num">Duration</th>
+          <th class="num">Peak memory</th><th>Command</th></tr>
+    </thead>
+    <tbody>
+      {% for j in jobs %}
+      <tr>
+        <td><code>{{ j.stage }}</code></td>
+        <td>{{ j.outcome or '—' }}</td>
+        <td class="num">{% if j.duration_s %}{{ "%.1f"|format(j.duration_s) }}s{% else %}—{% endif %}</td>
+        <td class="num">{% if j.peak_rss_mb %}{{ j.peak_rss_mb }} MB{% else %}—{% endif %}</td>
+        <td><code style="font-size:.75rem">{{ j.argv|join(' ') }}</code></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <details class="raw">
+    <summary>Full machine-readable report</summary>
+    <pre id="raw-json"></pre>
+  </details>
+</div>
+
+<script type="application/json" id="report-data">{{ payload_json|safe }}</script>
+{% endblock %}
+{% block scripts %}
+<script type="module">
+const data = JSON.parse(document.getElementById("report-data").textContent || "{}");
+document.getElementById("raw-json").textContent = JSON.stringify(data, null, 2);
+</script>
+{% endblock %}

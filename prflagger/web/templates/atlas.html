@@ -1,0 +1,231 @@
+{% extends "base.html" %}
+{% block title %}{{ repo.slug }} — PR Flagger{% endblock %}
+{% block nav %}
+  <a href="/repo/{{ repo.slug }}" aria-current="page">Map</a>
+  <a href="/repo/{{ repo.slug }}/prs">Pull requests</a>
+{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>{{ repo.slug }}</h1>
+    <p class="subtle">
+      What this repository is, before any pull request is considered.
+      {% if atlas %}Measured at <code>{{ atlas.sha[:12] }}</code>.{% endif %}
+    </p>
+  </div>
+  <span class="spacer"></span>
+  <button id="rebuild" class="primary">{% if atlas %}Rebuild map{% else %}Build map{% endif %}</button>
+</div>
+
+{% if not atlas %}
+<div class="card empty">
+  <h3>No map yet</h3>
+  <p class="subtle">Building it clones the repository and reads it &mdash; no model is
+     involved, and nothing is sent anywhere. It takes a few seconds on a small repository
+     and a minute or two on a large one.</p>
+</div>
+{% else %}
+
+<div class="stats" style="margin-bottom:20px">
+  <div class="stat">
+    <div class="value">{{ "{:,}".format(atlas.totals.loc) }}</div>
+    <div class="label">Lines</div>
+    <div class="sub">{{ atlas.totals.files }} files</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.totals.symbols }}</div>
+    <div class="label">Symbols</div>
+    <div class="sub">{{ atlas.totals.call_edges }} call edges</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.modules|length }}</div>
+    <div class="label">Modules</div>
+    <div class="sub">{{ atlas.test_topology.modules_with_tests }} carry tests</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.totals.commits_window }}</div>
+    <div class="label">Commits</div>
+    <div class="sub">last {{ atlas.totals.churn_days }} days</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.totals.contributors }}</div>
+    <div class="label">Contributors</div>
+    <div class="sub">in that window</div>
+  </div>
+  <div class="stat">
+    <div class="value">{{ atlas.totals.test_files }}</div>
+    <div class="label">Test files</div>
+  </div>
+</div>
+
+{% if atlas.analysis_depth != "structural" %}
+<div class="notice warning" style="margin-bottom:16px">
+  <span class="ico" aria-hidden="true">⚠</span>
+  <div><strong>Surface depth only.</strong> There is no exact symbol extractor for
+    {{ atlas.toolchain.display }} yet, so sizes, churn and test topology below are measured
+    but the call graph and public surface are not. This is stated rather than implied.</div>
+</div>
+{% endif %}
+
+<div class="grid two">
+  <div class="card">
+    <header>
+      <h2>Where the code is</h2>
+      <span class="spacer"></span>
+      <select id="treemap-color" aria-label="Colour the map by">
+        <option value="churn">Colour by churn</option>
+        <option value="untested">Colour by untested share</option>
+        <option value="symbols">Colour by symbol density</option>
+      </select>
+    </header>
+    <p class="subtle" style="margin:-6px 0 12px">Each rectangle is a module, sized by lines
+      of code. <span id="treemap-caption">Darker means more commits in the window.</span></p>
+    <div id="treemap" style="min-height:300px"></div>
+  </div>
+
+  <div class="card">
+    <header><h2>What depends on what</h2></header>
+    <p class="subtle" style="margin:-6px 0 12px">Modules that call into one another. Drag to
+      rearrange; the thickness of a line is how many call sites it carries.</p>
+    <div id="depgraph"></div>
+  </div>
+</div>
+
+<div class="grid two" style="margin-top:16px">
+  <div class="card">
+    <header><h2>Hotspots</h2></header>
+    <p class="subtle" style="margin:-6px 0 12px">Churn &times; size &times; untested share. The
+      three factors are shown so you can disagree with the weighting and still use the
+      numbers. This ranks where to look, not what is wrong.</p>
+    {% if atlas.hotspots %}
+    <div class="table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Module</th><th class="num">Score</th><th>Churn</th>
+          <th>Size</th><th>Untested</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for h in atlas.hotspots[:8] %}
+        <tr>
+          <td><code>{{ h.name }}</code>
+            <div class="muted" style="font-size:.75rem">{{ h.commits }} commits ·
+              {{ "{:,}".format(h.loc) }} lines · {{ h.authors }} authors</div></td>
+          <td class="num"><strong>{{ "%.3f"|format(h.score) }}</strong></td>
+          <td style="width:82px"><div class="bar"><span style="width:{{ (h.churn_factor*100)|round }}%;background:var(--seq-400)"></span></div></td>
+          <td style="width:82px"><div class="bar"><span style="width:{{ (h.size_factor*100)|round }}%;background:var(--seq-400)"></span></div></td>
+          <td style="width:82px"><div class="bar"><span style="width:{{ (h.untested_factor*100)|round }}%;background:var(--seq-400)"></span></div></td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+    {% else %}<p class="muted">No churn recorded in the window.</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <header><h2>Languages</h2></header>
+    <p class="subtle" style="margin:-6px 0 12px">By lines of code.</p>
+    <div class="bar" id="langbar" style="height:14px;margin-bottom:6px"></div>
+    <div class="legend" id="langlegend"></div>
+
+    <h3 style="margin-top:22px">Modules with no tests beside them</h3>
+    <p class="subtle" style="margin:4px 0 10px">A test file next to the code is a structural
+      signal, not coverage. The coverage probe supplies the real number per run.</p>
+    {% if atlas.test_topology.untested_modules %}
+      <div style="display:flex;flex-wrap:wrap;gap:5px">
+      {% for m in atlas.test_topology.untested_modules[:24] %}
+        <span class="pill">{{ m }}</span>
+      {% endfor %}
+      </div>
+    {% else %}
+      <p><span class="chip good"><span class="dot"></span>every module has tests beside it</span></p>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <header>
+    <h2>How this repository will be run</h2>
+    <span class="spacer"></span>
+    <span class="pill">{{ atlas.toolchain.display }}</span>
+  </header>
+  <p class="subtle" style="margin:-6px 0 12px">Detected from the files in the repository.
+    Every pull request is executed with exactly these commands, in a container with no
+    network, no capabilities and a read-only checkout.</p>
+  <dl class="contract">
+    <dt>Image</dt><dd><code>{{ atlas.toolchain.base_image }}</code></dd>
+    {% if atlas.toolchain.install %}
+    <dt>Install</dt><dd>{% for c in atlas.toolchain.install %}
+      <div class="evidence">{{ c|join(' ') }}</div>{% endfor %}</dd>
+    {% endif %}
+    <dt>Tests</dt><dd><div class="evidence">{{ atlas.toolchain.test.argv|join(' ') }}</div></dd>
+    {% if atlas.toolchain.lints %}
+    <dt>Lint</dt><dd>{% for l in atlas.toolchain.lints %}
+      <div class="evidence">{{ l.argv|join(' ') }}</div>{% endfor %}</dd>
+    {% endif %}
+    {% if atlas.toolchain.coverage %}
+    <dt>Coverage</dt><dd><div class="evidence">{{ atlas.toolchain.coverage|join(' ') }}</div></dd>
+    {% endif %}
+  </dl>
+</div>
+
+{% if atlas.surface %}
+<div class="card" style="margin-top:16px">
+  <header>
+    <h2>Public surface</h2>
+    <span class="spacer"></span>
+    <span class="pill">{{ atlas.surface|length }} symbols</span>
+  </header>
+  <p class="subtle" style="margin:-6px 0 12px">What this repository exposes. A pull request
+    that adds to or removes from this list is flagged.</p>
+  <details class="raw">
+    <summary>Show all {{ atlas.surface|length }}</summary>
+    <pre>{% for s in atlas.surface %}{{ s.kind[:4] }}  {{ s.fqn }}  ({{ s.file }}:{{ s.line }})
+{% endfor %}</pre>
+  </details>
+</div>
+{% endif %}
+
+{% endif %}
+
+<script type="application/json" id="atlas-data">{{ (atlas or {})|tojson }}</script>
+{% endblock %}
+
+{% block scripts %}
+<script type="module">
+import { post } from "/static/js/api.js";
+import { drawTreemap, drawGraph, drawLanguages } from "/static/js/atlas.js";
+
+const raw = document.getElementById("atlas-data").textContent;
+const atlas = JSON.parse(raw || "{}");
+if (atlas && atlas.modules) {
+  drawTreemap(atlas, document.getElementById("treemap"));
+  drawGraph(atlas, document.getElementById("depgraph"));
+  drawLanguages(atlas, document.getElementById("langbar"), document.getElementById("langlegend"));
+  document.getElementById("treemap-color").addEventListener("change", (e) => {
+    drawTreemap(atlas, document.getElementById("treemap"), e.target.value);
+    const captions = {
+      churn: "Darker means more commits in the window.",
+      untested: "Darker means a larger share of files with no tests beside them.",
+      symbols: "Darker means more symbols per line — denser code.",
+    };
+    document.getElementById("treemap-caption").textContent = captions[e.target.value];
+  });
+}
+
+document.getElementById("rebuild").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true; button.textContent = "Reading the repository…";
+  try {
+    await post("/api/repos/{{ repo.slug }}/atlas", {});
+    location.reload();
+  } catch (error) {
+    button.disabled = false; button.textContent = "Build map";
+    alert(error.message);
+  }
+});
+</script>
+{% endblock %}

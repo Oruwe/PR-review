@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}{{ repo.slug }} pull requests — PR Flagger{% endblock %}
+{% block nav %}
+  <a href="/repo/{{ repo.slug }}">Map</a>
+  <a href="/repo/{{ repo.slug }}/prs" aria-current="page">Pull requests</a>
+{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>Pull requests</h1>
+    <p class="subtle">Ranked by the weight of what was found, not by how much was found
+      &mdash; one behaviour change outranks six lint nits.</p>
+  </div>
+  <span class="spacer"></span>
+  <button id="poll">Check GitHub now</button>
+</div>
+
+<div class="toolbar">
+  <input type="search" id="filter" placeholder="Filter by title, author or number"
+         aria-label="Filter pull requests" size="30">
+  <select id="kind-filter" aria-label="Filter by finding kind">
+    <option value="">Any finding</option>
+    {% for k in kinds %}<option value="{{ k }}">{{ KIND_LABEL[k] }}</option>{% endfor %}
+  </select>
+  <span class="spacer" style="flex:1"></span>
+  <span class="subtle" id="count">{{ rows|length }} open</span>
+</div>
+
+{% if rows %}
+<div class="card" style="padding:0;overflow:hidden">
+  <div class="table-scroll">
+  <table id="prs">
+    <thead>
+      <tr>
+        <th style="width:52%">Pull request</th>
+        <th class="num">Risk</th>
+        <th>Findings</th>
+        <th>Run</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for r in rows %}
+      <tr data-search="{{ (r.title ~ ' ' ~ r.author ~ ' #' ~ r.number)|lower }}"
+          data-kinds="{{ r.by_kind.keys()|join(' ') }}">
+        <td>
+          <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+            <a href="https://github.com/{{ repo.slug }}/pull/{{ r.number }}"
+               target="_blank" rel="noopener"><strong>#{{ r.number }}</strong></a>
+            <span>{{ r.title }}</span>
+            {% if r.draft %}<span class="pill">draft</span>{% endif %}
+          </div>
+          <div class="muted" style="font-size:.78rem;margin-top:3px">
+            {{ r.author }} · <span style="color:var(--good-ink)">+{{ r.additions }}</span>
+            <span style="color:var(--critical)">−{{ r.deletions }}</span> ·
+            <code>{{ r.head_sha[:8] }}</code>
+          </div>
+        </td>
+        <td class="num" style="width:104px">
+          <div style="font-weight:600">{{ "%.2f"|format(r.risk) }}</div>
+          <div class="bar" style="margin-top:4px">
+            <span style="width:{{ [(r.risk*55)|round, 100]|min }}%;background:var(--seq-400)"></span>
+          </div>
+        </td>
+        <td style="width:220px">
+          {% if r.by_kind %}
+            {% for kind, n in r.by_kind.items() %}
+              <span class="chip {{ KIND_STATUS.get(kind, 'warning') }}"
+                    title="{{ KIND_LABEL.get(kind, kind) }}">
+                <span class="dot"></span>{{ KIND_LABEL.get(kind, kind) }} {{ n }}</span>
+            {% endfor %}
+          {% elif r.run_id and r.state == 'done' %}
+            <span class="chip good"><span class="dot"></span>nothing flagged</span>
+          {% else %}
+            <span class="muted">—</span>
+          {% endif %}
+        </td>
+        <td style="width:132px">
+          {% if r.run_id %}
+            <a href="/runs/{{ r.run_id }}" data-run="{{ r.run_id }}" class="run-state">
+              <span class="pill{% if r.state not in ('done','failed','cancelled') %} live{% endif %}">
+                {{ r.state|replace('_',' ') }}</span></a>
+          {% else %}
+            <span class="muted">not run</span>
+          {% endif %}
+        </td>
+        <td class="num" style="width:108px">
+          {% if r.run_id and r.state == 'done' %}
+            <a class="button" href="/runs/{{ r.run_id }}/report">Report</a>
+          {% else %}
+            <button class="trigger" data-pr="{{ r.number }}">Run</button>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% else %}
+<div class="card empty">
+  <h3>No open pull requests recorded</h3>
+  <p class="subtle">Press <em>Check GitHub now</em>, or wait for the next poll.</p>
+</div>
+{% endif %}
+
+{% endblock %}
+{% block scripts %}
+<script type="module">
+import { post, connect } from "/static/js/api.js";
+
+const table = document.getElementById("prs");
+const search = document.getElementById("filter");
+const kindFilter = document.getElementById("kind-filter");
+const count = document.getElementById("count");
+
+function applyFilters() {
+  if (!table) return;
+  const term = search.value.trim().toLowerCase();
+  const kind = kindFilter.value;
+  let shown = 0;
+  for (const row of table.tBodies[0].rows) {
+    const matchesTerm = !term || row.dataset.search.includes(term);
+    const matchesKind = !kind || (row.dataset.kinds || "").split(" ").includes(kind);
+    const visible = matchesTerm && matchesKind;
+    row.hidden = !visible;
+    if (visible) shown += 1;
+  }
+  count.textContent = `${shown} shown`;
+}
+search?.addEventListener("input", applyFilters);
+kindFilter?.addEventListener("change", applyFilters);
+
+document.getElementById("poll").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  button.disabled = true; button.textContent = "Checking…";
+  try {
+    const result = await post("/api/repos/{{ repo.slug }}/poll", {});
+    button.textContent = result.queued ? `Queued ${result.queued}` : "Up to date";
+    setTimeout(() => location.reload(), 700);
+  } catch (error) {
+    button.disabled = false; button.textContent = "Check GitHub now";
+    alert(error.message);
+  }
+});
+
+for (const button of document.querySelectorAll(".trigger")) {
+  button.addEventListener("click", async () => {
+    button.disabled = true; button.textContent = "Queueing…";
+    try {
+      const result = await post("/api/runs",
+        { repo: "{{ repo.slug }}", pr: Number(button.dataset.pr), force: true });
+      if (result.run_id) location.href = `/runs/${result.run_id}`;
+    } catch (error) {
+      button.disabled = false; button.textContent = "Run";
+      alert(error.message);
+    }
+  });
+}
+
+/* Live state for every run on this page, from the repo-scoped socket. */
+connect(`/ws/repo/{{ repo.slug }}`, (event) => {
+  if (event.type !== "run.state" && event.type !== "run.queued") return;
+  const link = document.querySelector(`[data-run="${event.run_id}"] .pill`);
+  if (!link) { if (event.type === "run.queued") setTimeout(() => location.reload(), 900); return; }
+  link.textContent = (event.state || "queued").replace(/_/g, " ");
+  link.classList.toggle("live", !["done", "failed", "cancelled"].includes(event.state));
+  if (event.state === "done") setTimeout(() => location.reload(), 1200);
+});
+</script>
+{% endblock %}

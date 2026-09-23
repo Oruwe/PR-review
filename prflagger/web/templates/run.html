@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Run {{ run.id }} — PR Flagger{% endblock %}
+{% block nav %}
+  <a href="/repo/{{ run.repo }}">Map</a>
+  <a href="/repo/{{ run.repo }}/prs">Pull requests</a>
+  <a href="/runs/{{ run.id }}" aria-current="page">Run</a>
+  <a href="/runs/{{ run.id }}/report">Report</a>
+{% endblock %}
+{% block content %}
+
+<div class="page-head">
+  <div>
+    <h1>
+      {% if pull %}#{{ pull.number }} {{ pull.title }}{% else %}Run {{ run.id }}{% endif %}
+    </h1>
+    <p class="subtle">
+      {{ run.repo }} ·
+      <code>{{ run.base_sha[:8] }}</code> → <code>{{ run.head_sha[:8] }}</code>
+      {% if pull %} · {{ pull.author }}{% endif %}
+    </p>
+  </div>
+  <span class="spacer"></span>
+  <span class="pill" id="state-pill">{{ run.state.value|replace('_',' ') }}</span>
+  <button id="cancel" class="danger">Cancel</button>
+  <a class="button" href="/runs/{{ run.id }}/report">Report</a>
+</div>
+
+<div class="card">
+  <header>
+    <h2>Pipeline</h2>
+    <span class="spacer"></span>
+    <span class="subtle" id="elapsed"></span>
+  </header>
+  <div class="stages" id="stages">
+    {% for s in stages %}
+      <div class="stage" data-stage="{{ s }}">
+        <div class="tick"></div>
+        <div class="nm">{{ s|replace('_',' ') }}</div>
+      </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="grid two" style="margin-top:16px">
+  <div class="card" style="grid-column:1/-1">
+    <header>
+      <h2>Sandbox</h2>
+      <span class="spacer"></span>
+      <span class="pill" id="job-label">waiting</span>
+    </header>
+
+    <div class="grid three" style="margin-bottom:14px">
+      <div>
+        <div class="meter">
+          <span class="name">CPU</span>
+          <div class="bar"><span id="cpu-bar" style="width:0%;background:var(--seq-400)"></span></div>
+          <span class="val" id="cpu-val">—</span>
+        </div>
+        <div class="meter">
+          <span class="name">Memory</span>
+          <div class="bar"><span id="rss-bar" style="width:0%;background:var(--seq-400)"></span></div>
+          <span class="val" id="rss-val">—</span>
+        </div>
+        <div class="meter">
+          <span class="name">Processes</span>
+          <div class="bar"><span id="pid-bar" style="width:0%;background:var(--seq-400)"></span></div>
+          <span class="val" id="pid-val">—</span>
+        </div>
+      </div>
+      <div>
+        <div class="meter">
+          <span class="name">Tests</span>
+          <div class="bar" id="test-bar"></div>
+          <span class="val" id="test-val">—</span>
+        </div>
+        <div class="muted" style="font-size:.76rem;margin-top:8px" id="test-detail">
+          No results yet.
+        </div>
+      </div>
+      <div>
+        <div class="muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em">
+          Isolation</div>
+        <div id="argv" class="evidence" style="margin-top:6px;max-height:88px;white-space:pre-wrap;
+             font-size:.72rem">not started</div>
+      </div>
+    </div>
+
+    <div class="toolbar">
+      <label style="display:flex;align-items:center;gap:6px;font-size:.84rem">
+        <input type="checkbox" id="follow" checked> Follow output
+      </label>
+      <select id="stream-filter" aria-label="Filter output stream">
+        <option value="">Both streams</option>
+        <option value="stdout">stdout only</option>
+        <option value="stderr">stderr only</option>
+      </select>
+      <input type="search" id="log-search" placeholder="Search output" size="20"
+             aria-label="Search output">
+      <span class="spacer" style="flex:1"></span>
+      <span class="subtle" id="line-count">0 lines</span>
+      <a class="button" href="/api/runs/{{ run.id }}/log" download>Download</a>
+    </div>
+
+    <div class="console" id="console" role="log" aria-live="polite" aria-label="Sandbox output">
+      <div class="console-empty" id="console-empty">
+        Waiting for the container to produce output…
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="margin-top:16px">
+  <header><h2>Jobs</h2></header>
+  <div class="table-scroll">
+  <table id="jobs">
+    <thead>
+      <tr>
+        <th>Stage</th><th>Outcome</th><th class="num">Duration</th>
+        <th class="num">Peak memory</th><th class="num">Limit</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for j in jobs %}
+      <tr data-job="{{ j.id }}">
+        <td><code>{{ j.stage }}</code></td>
+        <td>{{ j.outcome or '—' }}</td>
+        <td class="num">{% if j.duration_s %}{{ "%.1f"|format(j.duration_s) }}s{% else %}—{% endif %}</td>
+        <td class="num">{% if j.peak_rss_mb %}{{ j.peak_rss_mb }} MB{% else %}—{% endif %}</td>
+        <td class="num">{% if j.memory_mb %}{{ j.memory_mb }} MB{% else %}—{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% if not jobs %}<p class="muted" style="margin-top:8px">No jobs have run yet.</p>{% endif %}
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script type="module">
+import { mountRunView } from "/static/js/run.js";
+mountRunView({
+  runId: "{{ run.id }}",
+  terminal: {{ (run.state.value in ('done','failed','cancelled'))|tojson }},
+});
+</script>
+{% endblock %}
