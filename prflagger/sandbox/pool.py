@@ -179,10 +179,13 @@ class SandboxPool:
 
         async def on_line(stream: str, text: str, offset_ms: int) -> None:
             counter["seq"] += 1
+            # The file is the durable record and is written first; the publish
+            # is live-only. A log line never becomes a database row — see
+            # `EventBus.publish`.
             sink.write(stream, counter["seq"], offset_ms, text)
-            self._bus.emit(
+            self._bus.publish(
                 "log.line", run_id=spec.run_id, job_id=spec.job_id,
-                stream=stream, seq=counter["seq"], offset_ms=offset_ms, text=text,
+                stream=stream, line_seq=counter["seq"], offset_ms=offset_ms, text=text,
             )
 
         async def on_sample(cpu: float, rss: int, pids: int, offset_ms: int) -> None:

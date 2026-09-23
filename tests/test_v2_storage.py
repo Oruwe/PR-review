@@ -144,13 +144,13 @@ def test_replay_then_live_delivers_each_event_exactly_once(database: Database) -
 
         # A run that happened before anyone was watching.
         for index in range(5):
-            bus.emit("log.line", run_id="r1", text=f"early {index}")
+            bus.emit("job.sample", run_id="r1", text=f"early {index}")
 
         watcher = bus.subscribe(run_id="r1")          # subscribe BEFORE reading
         backlog = bus.since(0, run_id="r1")
         # Events arriving while the backlog is being read must not be lost.
         for index in range(3):
-            bus.emit("log.line", run_id="r1", text=f"during {index}")
+            bus.emit("job.sample", run_id="r1", text=f"during {index}")
 
         delivered = [e.payload["text"] for e in backlog]
         highest = backlog[-1].seq
@@ -162,7 +162,7 @@ def test_replay_then_live_delivers_each_event_exactly_once(database: Database) -
             delivered.append(event.payload["text"])
 
         for index in range(2):
-            bus.emit("log.line", run_id="r1", text=f"late {index}")
+            bus.emit("job.sample", run_id="r1", text=f"late {index}")
         while not watcher.queue.empty():
             delivered.append((await watcher.queue.get()).payload["text"])
 
@@ -177,6 +177,28 @@ def test_replay_then_live_delivers_each_event_exactly_once(database: Database) -
     delivered, expected = asyncio.run(scenario())
     assert delivered == expected
     assert len(delivered) == len(set(delivered)), "an event was delivered twice"
+
+
+def test_published_records_are_fanned_out_but_never_stored(database: Database) -> None:
+    """`publish` is the escape hatch for records whose durable copy is elsewhere."""
+
+    async def scenario() -> tuple[int, list[str]]:
+        bus = EventBus(database)
+        bus.bind_loop(asyncio.get_running_loop())
+        watcher = bus.subscribe(run_id="r1")
+        for index in range(200):
+            bus.publish("log.line", run_id="r1", text=f"line {index}")
+        seen: list[str] = []
+        while not watcher.queue.empty():
+            event = await watcher.queue.get()
+            seen.append(event.payload["text"])
+            assert event.seq == 0, "a published record must not claim a row sequence"
+        watcher.close()
+        return bus.head(), seen
+
+    head, seen = asyncio.run(scenario())
+    assert head == 0, "publish wrote rows to the events table"
+    assert len(seen) == 200, "published records did not reach live subscribers"
 
 
 def test_pruning_keeps_events_for_runs_still_in_flight(database: Database) -> None:
@@ -194,8 +216,8 @@ def test_pruning_keeps_events_for_runs_still_in_flight(database: Database) -> No
     store.set_run_state("over", RunState.DONE)
 
     bus = EventBus(database)
-    bus.emit("log.line", run_id="live", text="from a run still going")
-    bus.emit("log.line", run_id="over", text="from a finished run")
+    bus.emit("job.sample", run_id="live", text="from a run still going")
+    bus.emit("job.sample", run_id="over", text="from a finished run")
     database.execute("UPDATE events SET ts = ?", (time.time() - 40 * 86400,))
 
     bus.prune(older_than_days=7)

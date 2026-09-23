@@ -324,8 +324,12 @@ def create_app(
     # -- sockets --------------------------------------------------------------
 
     @app.websocket("/ws/runs/{run_id}")
-    async def run_socket(websocket: WebSocket, run_id: str, cursor: int = 0) -> None:
-        await stream_events(websocket, built.bus, run_id=run_id, cursor=cursor)
+    async def run_socket(
+        websocket: WebSocket, run_id: str, cursor: int = 0, lines: int = 0
+    ) -> None:
+        await stream_events(
+            websocket, built.bus, run_id=run_id, cursor=cursor, lines=lines
+        )
 
     @app.websocket("/ws/repo/{owner}/{name}")
     async def repo_socket(

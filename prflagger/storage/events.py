@@ -9,6 +9,15 @@ mid-run must see the same transcript as one that was watching from the start.
 So a subscriber starts buffering live events *first*, replays the table from its
 cursor, and then drains the buffer discarding anything already replayed. There
 is no window in which an event can be missed or shown twice.
+
+**Log lines are the exception, and deliberately so.** They are the only
+unbounded dimension here: a suite that prints fifty thousand lines would write
+fifty thousand rows for one job, and a busy repository would do that many times
+a day against a database with one writer. So a log line is *published* rather
+than *emitted* — fanned out live, never given a row. Its durable copy is the
+per-job NDJSON transcript the sandbox already writes, and the WebSocket replays
+from that file. The transcript a late client sees is identical either way; only
+the storage differs.
 """
 
 from __future__ import annotations
@@ -161,6 +170,29 @@ class EventBus:
         event = Event(seq=seq, ts=now, type=type_, run_id=run_id, repo=repo, payload=payload)
         self._fan_out(event)
         return seq
+
+    def publish(
+        self,
+        type_: str,
+        *,
+        run_id: str | None = None,
+        repo: str | None = None,
+        **payload: Any,
+    ) -> None:
+        """Fan out to live subscribers without persisting.
+
+        For high-frequency events whose durable copy lives elsewhere — log
+        lines, which the sandbox writes to a per-job NDJSON file. Persisting
+        them here would make `events` grow with the size of every test suite
+        that ever ran, which is the one thing this table must not do.
+
+        Carries `seq=0`, so a client's replay cursor never advances past a
+        record it could not later ask for again.
+        """
+        self._fan_out(
+            Event(seq=0, ts=time.time(), type=type_, run_id=run_id, repo=repo,
+                  payload=payload)
+        )
 
     def _fan_out(self, event: Event) -> None:
         if not self._subscribers:

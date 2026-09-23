@@ -37,10 +37,17 @@ function setConnection(state) {
 
 /**
  * Open an event socket. `onEvent` is called with each event's flat payload.
- * Returns a handle with `close()` and the current cursor.
+ *
+ * Two cursors are carried, because the server replays from two places: `cursor`
+ * over the event rows, and `lines` over the stored transcript, which is not in
+ * the database. A reconnect sends both back, so it resumes where it stopped
+ * instead of restarting the transcript or losing the middle of it.
+ *
+ * Returns a handle with `close()` and the current cursors.
  */
 export function connect(path, onEvent, { onStatus } = {}) {
   let cursor = 0;
+  let lines = 0;
   let socket = null;
   let closed = false;
   let backoff = 500;
@@ -51,6 +58,7 @@ export function connect(path, onEvent, { onStatus } = {}) {
     const url = new URL(path, location.href);
     url.protocol = scheme + ":";
     url.searchParams.set("cursor", String(cursor));
+    url.searchParams.set("lines", String(lines));
     socket = new WebSocket(url.toString());
     setConnection("connecting");
 
@@ -62,6 +70,7 @@ export function connect(path, onEvent, { onStatus } = {}) {
       if (frame.type === "ping") return;
       if (frame.type === "live") {
         cursor = Math.max(cursor, frame.cursor || 0);
+        lines = Math.max(lines, frame.lines || 0);
         setConnection("live");
         onStatus?.("live");
         return;
@@ -75,7 +84,10 @@ export function connect(path, onEvent, { onStatus } = {}) {
       const events = frame.type === "batch" ? frame.events : [frame.event];
       for (const event of events || []) {
         if (!event) continue;
+        // Log lines carry seq 0 — they are never replayed from the event table,
+        // so they must not move the row cursor past a record still to come.
         cursor = Math.max(cursor, event.seq || 0);
+        if (event.type === "log.line") lines += 1;
         onEvent(event);
       }
     };
@@ -95,5 +107,6 @@ export function connect(path, onEvent, { onStatus } = {}) {
   return {
     close() { closed = true; socket?.close(); },
     get cursor() { return cursor; },
+    get lines() { return lines; },
   };
 }

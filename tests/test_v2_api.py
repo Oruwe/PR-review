@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
@@ -129,14 +130,46 @@ def test_a_run_cannot_be_triggered_for_an_unknown_pull(client: TestClient) -> No
     assert "poll the repo first" in response.text
 
 
+def _write_transcript(run_id: str, job: str, texts: list[str]) -> None:
+    """Write a per-job transcript the way the sandbox does."""
+    from prflagger.core.config import cache_root
+
+    directory = cache_root() / "runs" / run_id
+    directory.mkdir(parents=True, exist_ok=True)
+    with (directory / f"{job}.ndjson").open("a", encoding="utf-8") as handle:
+        for index, text in enumerate(texts, start=1):
+            handle.write(json.dumps({
+                "stream": "stdout", "seq": index, "offset_ms": index * 100, "text": text,
+            }) + "\n")
+
+
+def test_log_lines_are_never_written_to_the_events_table(
+    client: TestClient, service: Service
+) -> None:
+    """The one unbounded dimension must not live in the database.
+
+    A suite printing fifty thousand lines would otherwise write fifty thousand
+    rows for a single job, against a database with one writer.
+    """
+    run_id = _seed(service)
+    before = int(service.db.scalar("SELECT COUNT(*) FROM events", default=0) or 0)
+    for index in range(500):
+        service.bus.publish("log.line", run_id=run_id, stream="stdout",
+                            text=f"line {index}", offset_ms=index)
+    after = int(service.db.scalar("SELECT COUNT(*) FROM events", default=0) or 0)
+    assert after == before, f"{after - before} log lines leaked into the events table"
+
+
 def test_the_socket_replays_the_backlog_then_goes_live(
     client: TestClient, service: Service
 ) -> None:
-    """A tab opened at the end of a run must see what a tab opened at the start saw."""
+    """A tab opened at the end of a run must see what a tab opened at the start saw.
+
+    Two sources are replayed: the event rows, and the transcript on disk. This
+    asserts they arrive together and in order.
+    """
     run_id = _seed(service)
-    for index in range(4):
-        service.bus.emit("log.line", run_id=run_id, stream="stdout",
-                         text=f"line {index}", seq=index, offset_ms=index * 100)
+    _write_transcript(run_id, f"{run_id}-base_run", [f"line {i}" for i in range(4)])
 
     with client.websocket_connect(f"/ws/runs/{run_id}?cursor=0") as socket:
         replayed: list[dict] = []
@@ -148,14 +181,42 @@ def test_the_socket_replays_the_backlog_then_goes_live(
                 break
         texts = [e["text"] for e in replayed if e["type"] == "log.line"]
         assert texts == ["line 0", "line 1", "line 2", "line 3"]
-        # The run's own state change is in the transcript too.
+        # The row-backed records replay alongside the transcript.
         assert any(e["type"] == "run.observations" for e in replayed)
 
-        # Now live: an event emitted after the handshake arrives, exactly once.
-        service.bus.emit("log.line", run_id=run_id, stream="stdout", text="live one")
+        # Now live: a line published after the handshake arrives, exactly once.
+        service.bus.publish("log.line", run_id=run_id, stream="stdout", text="live one")
         frame = socket.receive_json()
         assert frame["type"] == "event"
         assert frame["event"]["text"] == "live one"
+
+
+def test_a_reconnect_resumes_the_transcript_instead_of_repeating_it(
+    client: TestClient, service: Service
+) -> None:
+    """A dropped socket must not replay lines the client already rendered."""
+    run_id = _seed(service)
+    _write_transcript(run_id, f"{run_id}-base_run", [f"line {i}" for i in range(6)])
+
+    def drain(query: str) -> tuple[list[str], int]:
+        with client.websocket_connect(f"/ws/runs/{run_id}?{query}") as socket:
+            seen: list[str] = []
+            while True:
+                frame = socket.receive_json()
+                if frame["type"] == "batch":
+                    seen += [e["text"] for e in frame["events"] if e["type"] == "log.line"]
+                elif frame["type"] == "live":
+                    return seen, frame["lines"]
+
+    first, line_cursor = drain("cursor=0&lines=0")
+    assert first == [f"line {i}" for i in range(6)]
+    assert line_cursor == 6
+
+    # The client reconnects having rendered three of them.
+    resumed, _ = drain("cursor=0&lines=3")
+    assert resumed == ["line 3", "line 4", "line 5"], (
+        "a reconnect re-sent lines the client already had"
+    )
 
 
 def test_the_socket_only_carries_its_own_run(client: TestClient, service: Service) -> None:
