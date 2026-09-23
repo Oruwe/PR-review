@@ -52,6 +52,9 @@ class JobSpec:
     package_roots: tuple[str, ...] = ()
     system_binaries: tuple[str, ...] = ()
     report_format: str = ""
+    #: Exit codes that mean the command ran and produced a result. Empty means
+    #: pytest's convention, which is the default for a test job.
+    ok_codes: tuple[int, ...] = ()
 
     def as_job(self, image_key: str) -> Job:
         """The v1 `Job`, whose `idempotency_key` still keys the result cache."""
@@ -208,7 +211,7 @@ class SandboxPool:
         per_test = parse_tests(spec.report_format or spec.toolchain.test.report_format,
                                stream.stdout)
         result = TestResult(
-            outcome=_classify(stream.returncode, per_test),
+            outcome=_classify(stream.returncode, spec.ok_codes),
             per_test=per_test,
             duration_s=stream.duration_s,
             peak_rss_mb=stream.peak_rss_mb,
@@ -257,18 +260,25 @@ class SandboxPool:
             return
 
 
-def _classify(returncode: int, per_test: dict[str, str]) -> Outcome:
-    """SPEC.md § C1's mapping. A timeout and an OOM are results, not errors."""
-    if returncode == 0:
-        return Outcome.PASSED
+def _classify(returncode: int, ok_codes: tuple[int, ...] = ()) -> Outcome:
+    """SPEC.md § C1's mapping. A timeout and an OOM are results, not errors.
+
+    `ok_codes` lets a non-test job say which exits mean "ran and found things".
+    A linter exiting 1 has done its job; calling that a collection error would
+    discard a perfectly good result.
+    """
     if returncode == 124:
         return Outcome.TIMEOUT
     if returncode == 137:
         return Outcome.OOM
-    if returncode == 2:
-        return Outcome.COLLECTION_ERROR
     if returncode == 125:
         return Outcome.INSTALL_FAILED  # docker itself could not start the container
+    if returncode == 0:
+        return Outcome.PASSED
+    if ok_codes:
+        return Outcome.PASSED if returncode in ok_codes else Outcome.FAILED
+    if returncode == 2:
+        return Outcome.COLLECTION_ERROR
     return Outcome.FAILED
 
 

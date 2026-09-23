@@ -8,11 +8,15 @@ version = "0.1.0"
 description = "A PR verification agent that reports facts with evidence"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic",
     "boto3",
-    "structlog",
+    "fastapi",
+    "httpx",
+    "jinja2",
     "networkx",
     "numpy",
-    "jinja2",
+    "structlog",
+    "uvicorn[standard]",
 ]
 
 [project.scripts]
@@ -20,7 +24,7 @@ prflagger = "prflagger.cli:main"
 
 [project.optional-dependencies]
 embed = ["sentence-transformers"]
-dev = ["pytest", "ruff", "mypy", "types-networkx"]
+dev = ["pytest", "pytest-asyncio", "ruff", "mypy", "types-networkx"]
 
 [tool.setuptools.packages.find]
 include = ["prflagger*"]
@@ -49,6 +53,7 @@ module = [
     "sentence_transformers.*",
     "structlog.*",
     "networkx.*",
+    "numpy.*",
 ]
 ignore_missing_imports = true
 

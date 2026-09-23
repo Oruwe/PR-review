@@ -111,14 +111,24 @@ PYTHON = Toolchain(
     install=(("pip", "install", "--no-cache-dir", "--disable-pip-version-check", "/build"),),
     test=TestCommand(argv=_PYTEST, report_format="pytest-json", selector_flag="-k"),
     lints=(
-        LintCommand("ruff", ("ruff", "check", "--output-format=json", "."), "ruff-json"),
         LintCommand(
-            "mypy", ("mypy", "--no-error-summary", "."), "mypy-text", ok_codes=(0, 1, 2)
+            "ruff",
+            ("ruff", "check", "--no-cache", "--output-format=json", "."),
+            "ruff-json",
+        ),
+        LintCommand(
+            "mypy",
+            ("mypy", "--no-error-summary", "--cache-dir=/tmp/mypy", "--no-incremental", "."),
+            "mypy-text",
+            ok_codes=(0, 1, 2),
         ),
     ),
     coverage=CoverageCommand(
         argv=(
             "sh", "-c",
+            # COVERAGE_FILE: the data file defaults to the cwd, which is the
+            # read-only mount.
+            "export COVERAGE_FILE=/tmp/.coverage; "
             "coverage run -m pytest -p no:cacheprovider -q >/dev/null 2>&1; "
             "coverage json -o /dev/stdout 2>/dev/null",
         ),

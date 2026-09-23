@@ -14,8 +14,8 @@ from pathlib import Path
 import pytest
 
 from prflagger import llm
-from prflagger.llm import cache as llm_cache
 from prflagger.characterize import differential as differential_module
+from prflagger.llm import cache as llm_cache
 from prflagger.models import Finding, Norm
 from prflagger.probes._support import norm_for
 from prflagger.report.rank import rank

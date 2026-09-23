@@ -235,7 +235,16 @@ class Store:
             "exit_code", "duration_s", "peak_rss_mb", "memory_mb", "timeout_s",
             "log_path", "started_at", "finished_at",
         )
-        values = [fields.get(c) for c in columns]
+        # Columns declared NOT NULL DEFAULT '' still reject an explicit NULL, so a
+        # field the caller did not supply has to become the default here rather
+        # than being bound as None.
+        text_columns = ("idempotency_key", "image_tag", "log_path")
+        payload = dict(fields)
+        payload["argv"] = json_col(list(payload.get("argv") or []))
+        for column in text_columns:
+            payload[column] = payload.get(column) or ""
+        payload["stage"] = payload.get("stage") or "unknown"
+        values = [payload.get(c) for c in columns]
         assignments = ", ".join(f"{c} = excluded.{c}" for c in columns[2:])
         self.db.execute(
             f"INSERT INTO jobs ({', '.join(columns)}) VALUES ({', '.join('?' * len(columns))}) "
@@ -244,9 +253,15 @@ class Store:
         )
 
     def jobs(self, run_id: str) -> list[dict[str, Any]]:
-        return [dict(r) for r in self.db.query(
+        rows = self.db.query(
             "SELECT * FROM jobs WHERE run_id = ? ORDER BY started_at, id", (run_id,)
-        )]
+        )
+        out = []
+        for row in rows:
+            entry = dict(row)
+            entry["argv"] = _loads(entry.get("argv"), [])
+            out.append(entry)
+        return out
 
     # -- observations and what annotates them ---------------------------------
 

@@ -39,6 +39,9 @@ class RepoConfig:
 
     slug: str
     default_branch: str = "main"
+    #: Where to clone from. Empty means https://github.com/<slug>. Set it for a
+    #: self-hosted server, a mirror, or a local path.
+    clone_url: str = ""
     toolchain: str = ""  # "" -> detect from marker files
     package_roots: tuple[str, ...] = ()
     system_binaries: tuple[str, ...] = ()
@@ -178,6 +181,7 @@ def load(path: Path | str = "config.toml") -> Config:
             RepoConfig(
                 slug=str(entry["slug"]),
                 default_branch=str(entry.get("default_branch", "main")),
+                clone_url=str(entry.get("clone_url", "")),
                 toolchain=str(entry.get("toolchain", "")),
                 package_roots=_as_tuple(entry.get("package_roots")),
                 system_binaries=_as_tuple(entry.get("system_binaries")),
