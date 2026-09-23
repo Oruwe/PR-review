@@ -59,3 +59,13 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+# Everything the service reads from its own package at run time. Without these a
+# regular (non-editable) install cannot create its database or render a page.
+[tool.setuptools.package-data]
+prflagger = [
+    "report/app.html",
+    "storage/schema.sql",
+    "web/templates/*.html",
+    "web/static/**/*",
+]

@@ -122,6 +122,43 @@ Where a pack has no exact symbol extractor, the repository still gets sizes, chu
 topology and a real sandboxed run; the map says `analysis_depth: surface` rather than
 implying a depth it never reached.
 
+## One-shot checks and the offline interface
+
+Without the service, a single change can be checked from the command line. `check` writes
+two artifacts. `report.html` is the static report — the thing you attach
+to a review. `index.html` is the interface: one self-contained HTML file, no backend, no
+CDN, no build step, which renders from the findings document at `.cache/ui/findings.json`.
+
+```bash
+python -m prflagger.cli check --repo <checkout> --base <sha> --head <sha> \
+    --json .cache/ui/findings.json --ui index.html
+python -m prflagger.cli ui --data .cache/ui/findings.json --out index.html  # re-render only
+
+python -m scripts.collect_showcase   # build the document from real runs on the target
+```
+
+It has three zones and one panel:
+
+- **the pipeline**, drawn as a node graph carrying each component's observed status, the
+  count it emitted and the time it took — including the components that could not run;
+- **the flags**, ranked, each expanding into the four-field contract: what changed, how
+  we know, which repo standard makes it matter, and the confidence;
+- **the analysed pull requests**, each opening onto the structural account of the change
+  (from the blast radius and the diff, not a summary), its sandbox runs and its flags;
+- **the validation loop**, which plays back what characterization really did: candidates
+  generated, all of them run against base, the ones that failed on base struck through
+  and discarded, regeneration with the real failure output, survivors run against head,
+  and the one that goes red. The discard rate on it is measured, not illustrative.
+
+Every sandbox run in the interface can be replayed from its recorded per-line arrival
+times (`prflagger/sandbox/record.py` performs the identical C1 invocation and timestamps
+each line as it arrives), or read in full, searchable, with failures anchored so a
+finding links straight to the line that produced it.
+
+`index.html` in this repository is generated output, committed so it can be opened
+without running the pipeline first. The interface never issues a verdict: no approve, no
+reject, no score. Where something could not be measured, it says so on the page.
+
 ## What it needs
 
 | Capability | Used for | How it is configured |
