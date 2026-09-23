@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sign in — PR Flagger</title>
+<link rel="stylesheet" href="/static/css/app.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>&#9873;</text></svg>">
+<script>
+  try {
+    var t = localStorage.getItem("pf-theme");
+    if (t) document.documentElement.setAttribute("data-theme", t);
+  } catch (e) { /* the OS preference still applies */ }
+</script>
+</head>
+<body>
+<main class="login">
+  <div class="card">
+    <header>
+      <h1 class="login-brand">
+        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+          <path d="M3 1v14M3 2h9l-2 3 2 3H3" stroke="currentColor" stroke-width="1.7"
+                stroke-linejoin="round" stroke-linecap="round"/>
+        </svg>
+        PR Flagger
+      </h1>
+    </header>
+    <p class="subtle" style="margin-top:0">Sign in with the admin token to manage
+      repositories and runs, or the viewer token to read.</p>
+    {% if error %}
+    <div class="notice critical" role="alert" style="margin-bottom:12px">
+      <span class="ico" aria-hidden="true">!</span><div>{{ error }}</div>
+    </div>
+    {% endif %}
+    <form method="post" action="/login">
+      <label for="token" class="login-label">Token</label>
+      <input id="token" name="token" type="password" autocomplete="current-password"
+             required autofocus spellcheck="false">
+      <input type="hidden" name="next" value="{{ next }}">
+      <button class="primary" type="submit" style="width:100%;margin-top:12px">Sign in</button>
+    </form>
+    <p class="muted" style="font-size:.78rem;margin:14px 0 0">Tokens are set by whoever runs
+      this service, as <code>PRFLAGGER_ADMIN_TOKEN</code> and
+      <code>PRFLAGGER_VIEWER_TOKEN</code>.</p>
+  </div>
+</main>
+</body>
+</html>

@@ -149,7 +149,7 @@ export function mountRunView({ runId, terminal }) {
     if (state === "done") document.querySelectorAll(".stage").forEach((el) => el.classList.add("done"));
     if (TERMINAL.has(state)) {
       finished = true;
-      document.getElementById("cancel").disabled = true;
+      const cancel = document.getElementById("cancel"); if (cancel) cancel.disabled = true;
       jobLabel.textContent = state;
       if (state === "done" && !wasFinishedOnLoad) {
         setTimeout(() => { location.href = `/runs/${runId}/report`; }, 1500);
@@ -198,7 +198,7 @@ export function mountRunView({ runId, terminal }) {
     }
   });
 
-  document.getElementById("cancel").addEventListener("click", async (clicked) => {
+  document.getElementById("cancel")?.addEventListener("click", async (clicked) => {
     clicked.currentTarget.disabled = true;
     try { await post(`/api/runs/${runId}/cancel`, {}); } catch { /* already gone */ }
   });

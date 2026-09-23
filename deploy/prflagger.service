@@ -1,0 +1,38 @@
+# PR Flagger as a systemd service, for a direct install on a VM. See DEPLOY.md.
+#     sudo cp deploy/prflagger.service /etc/systemd/system/
+#     sudo systemctl daemon-reload && sudo systemctl enable --now prflagger
+
+[Unit]
+Description=PR Flagger - always-on pull-request verification
+Documentation=file:///opt/prflagger/src/DEPLOY.md
+Wants=network-online.target
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=prflagger
+Group=prflagger
+# Running pull requests in containers needs the Docker socket.
+SupplementaryGroups=docker
+WorkingDirectory=/var/lib/prflagger
+Environment=PRFLAGGER_CACHE_DIR=/var/lib/prflagger
+Environment=PRFLAGGER_CONFIG=/etc/prflagger/config.toml
+# Tokens and keys; readable by root and the service only (chmod 600).
+EnvironmentFile=/etc/prflagger/env
+ExecStart=/opt/prflagger/venv/bin/prflagger serve --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+TimeoutStopSec=60
+
+# Hardening that leaves the Docker socket and the data directory usable.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ReadWritePaths=/var/lib/prflagger
+
+[Install]
+WantedBy=multi-user.target

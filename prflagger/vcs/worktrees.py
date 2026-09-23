@@ -22,6 +22,7 @@ import structlog
 from prflagger.core.config import cache_root
 from prflagger.core.errors import RepoUnavailable
 from prflagger.gitsafety import assert_safe_revision
+from prflagger.vcs.credentials import run_git
 
 __all__ = ["bare_clone", "ensure_readable", "worktree_for"]
 
@@ -47,11 +48,12 @@ def bare_clone(slug: str, *, url: str | None = None) -> Path:
         if path.is_dir():
             return path
         path.parent.mkdir(parents=True, exist_ok=True)
+        source = url or f"https://github.com/{slug}"
         completed = _git(
-            ["clone", "--bare", "--filter=blob:none", url or f"https://github.com/{slug}",
-             str(path)],
+            ["clone", "--bare", "--filter=blob:none", source, str(path)],
             cwd=None,
             timeout_s=1800,
+            remote=source,
         )
         if completed.returncode != 0:
             raise RepoUnavailable(f"could not clone {slug}: {completed.stderr.strip()[:400]}")
@@ -70,7 +72,8 @@ def worktree_for(slug: str, commit: str, *, url: str | None = None) -> Path:
             return path
         path.parent.mkdir(parents=True, exist_ok=True)
         if _git(["cat-file", "-e", f"{commit}^{{commit}}"], cwd=bare).returncode != 0:
-            _git(["fetch", "origin", "--quiet", "--filter=blob:none"], cwd=bare, timeout_s=900)
+            _git(["fetch", "origin", "--quiet", "--filter=blob:none"], cwd=bare, timeout_s=900,
+                 remote=url or f"https://github.com/{slug}")
         completed = _git(
             ["worktree", "add", "--detach", "--quiet", str(path), commit],
             cwd=bare,
@@ -123,13 +126,13 @@ def _widen(path: Path, *, directory: bool) -> None:
 
 
 def _git(
-    argv: Sequence[str], *, cwd: Path | None, timeout_s: float = 300
+    argv: Sequence[str], *, cwd: Path | None, timeout_s: float = 300, remote: str | None = None
 ) -> subprocess.CompletedProcess[str]:
+    """Run git. `remote` is the URL the command talks to, so a token can go with it
+    (see `vcs.credentials`); commands that stay local leave it None."""
     command = ["git"] if cwd is None else ["git", f"--git-dir={cwd}"]
     try:
-        return subprocess.run(  # noqa: S603
-            [*command, *argv], capture_output=True, text=True, check=False, timeout=timeout_s
-        )
+        return run_git([*command, *argv], remote=remote, timeout_s=timeout_s)
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(
             args=[*command, *argv], returncode=124, stdout="", stderr="git timed out"

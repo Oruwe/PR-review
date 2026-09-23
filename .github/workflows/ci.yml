@@ -65,6 +65,7 @@ jobs:
             tests/test_v2_api.py tests/test_v2_scheduler.py tests/test_v2_janitor.py \
             tests/test_v2_charter.py tests/test_v2_brain.py \
             tests/test_v2_llm.py tests/test_v2_adjudicate.py \
+            tests/test_v2_auth.py tests/test_v2_git_auth.py tests/test_v2_deploy.py \
             tests/test_brain.py tests/test_web.py \
             tests/test_analysis.py tests/test_privacy.py tests/test_gitsafety.py
 
@@ -141,6 +142,73 @@ jobs:
         run: |
           python -m prflagger.cli --help >/dev/null
           python -m prflagger.cli gc --dry-run
+
+  # Stage 4b — the deployment kit, deployed the way DEPLOY.md says. The service runs
+  # in a container and starts sandboxes on the runner's Docker; this proves the
+  # same-path data mount, the Docker socket, the cgroup mount (v2 here, v1 was
+  # checked by hand), sign-in, and a backup taken while serving.
+  deploy:
+    name: deployment (compose)
+    needs: static
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the service image
+        run: docker build -f deploy/Dockerfile -t prflagger:latest .
+      - name: Start it as DEPLOY.md does
+        run: |
+          set -euo pipefail
+          DATA="$RUNNER_TEMP/prflagger-data"
+          sudo install -d -o 10001 -g 10001 "$DATA"
+          ADMIN="$(openssl rand -hex 32)"
+          echo "::add-mask::$ADMIN"
+          { echo "DATA=$DATA"; echo "ADMIN=$ADMIN"; } >> "$GITHUB_ENV"
+          {
+            echo "PRFLAGGER_ADMIN_TOKEN=$ADMIN"
+            echo "PRFLAGGER_DATA=$DATA"
+            echo "DOCKER_GID=$(stat -c %g /var/run/docker.sock)"
+            echo "PRFLAGGER_PORT=8000"
+          } > deploy/.env
+          docker compose -f deploy/compose.yaml up -d --no-build
+          for _ in $(seq 1 60); do
+            curl -fsS http://127.0.0.1:8000/api/health >/dev/null 2>&1 && break
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8000/api/health | tee /dev/stderr | grep -q '"auth":"tokens"'
+      - name: Nothing without a token, everything with one
+        run: |
+          set -euo pipefail
+          code() { curl -s -o /dev/null -w '%{http_code}' "$@"; }
+          [ "$(code http://127.0.0.1:8000/api/repos)" = 401 ]
+          [ "$(code -H "Authorization: Bearer $ADMIN" http://127.0.0.1:8000/api/repos)" = 200 ]
+          [ "$(code -o /dev/null http://127.0.0.1:8000/)" = 303 ]
+      - name: A sandbox started from inside the container is measured
+        run: |
+          docker pull -q python:3.11-slim
+          docker compose -f deploy/compose.yaml exec -T prflagger python - <<'EOF'
+          import asyncio, time
+          from prflagger.sandbox.stream import run_streaming
+          name = f"pf-ci-{int(time.time() * 1000)}"
+          result = asyncio.run(run_streaming(
+              ["docker", "run", "--rm", "--name", name, "--network=none", "--memory=512m",
+               "python:3.11-slim", "python", "-c",
+               "x = bytearray(150 * 1024 * 1024)\nimport time; time.sleep(2)"],
+              timeout_s=120, container_name=name, sample_interval_s=0.3))
+          print("exit", result.returncode, "peak MB", result.peak_rss_mb, "samples", result.samples)
+          assert result.returncode == 0, result.stderr
+          assert result.peak_rss_mb and result.peak_rss_mb >= 140, "memory was not measured"
+          EOF
+      - name: Back up while serving; restore refuses while it runs
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/compose.yaml exec -T prflagger prflagger backup --out "$DATA/b.tar.gz"
+          if docker compose -f deploy/compose.yaml exec -T prflagger prflagger restore "$DATA/b.tar.gz"; then
+            echo "::error::restore ran while the service was running"; exit 1
+          fi
+      - name: Service logs
+        if: always()
+        run: docker compose -f deploy/compose.yaml logs --no-color | tail -100
 
   # Stage 5 — needs the network and a fork with seeded branches, so it is
   # reported but does not gate. A fixture that cannot be built is not a defect

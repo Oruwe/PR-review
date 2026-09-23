@@ -16,7 +16,7 @@
     </p>
   </div>
   <span class="spacer"></span>
-  <button id="rebuild" class="primary">{% if atlas %}Rebuild map{% else %}Build map{% endif %}</button>
+  {% if can_write(request) %}<button id="rebuild" class="primary">{% if atlas %}Rebuild map{% else %}Build map{% endif %}</button>{% endif %}
 </div>
 
 
@@ -101,7 +101,7 @@
   <header>
     <h2>What this repository holds itself to</h2>
     <span class="spacer"></span>
-    <button id="relearn" title="Read new review history now and mine the norms again">Re-read reviews</button>
+    {% if can_write(request) %}<button id="relearn" title="Read new review history now and mine the norms again">Re-read reviews</button>{% endif %}
   </header>
   <p class="subtle" style="margin-top:0">Standards the repository declares in its own
     configuration, and standards its reviewers enforced: a review comment counts only if the
@@ -355,7 +355,7 @@ if (atlas && atlas.modules) {
   });
 }
 
-document.getElementById("rebuild").addEventListener("click", async (event) => {
+document.getElementById("rebuild")?.addEventListener("click", async (event) => {
   const button = event.currentTarget;
   button.disabled = true; button.textContent = "Reading the repository…";
   try {

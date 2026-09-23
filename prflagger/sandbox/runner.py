@@ -503,7 +503,8 @@ def bare_clone(slug: str, *, url: str | None = None) -> Path:
     if path.is_dir():
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
-    _git(["clone", "--bare", url or f"https://github.com/{slug}", str(path)], cwd=None)
+    source = url or f"https://github.com/{slug}"
+    _git(["clone", "--bare", source, str(path)], cwd=None, remote=source)
     return path
 
 
@@ -516,13 +517,15 @@ def worktree_for(slug: str, commit: str, *, url: str | None = None) -> Path:
         return path
     path.parent.mkdir(parents=True, exist_ok=True)
     if _git(["cat-file", "-e", f"{commit}^{{commit}}"], cwd=bare).returncode != 0:
-        _git(["fetch", "origin", "--quiet"], cwd=bare)
+        _git(["fetch", "origin", "--quiet"], cwd=bare, remote=url or f"https://github.com/{slug}")
     _git(["worktree", "add", "--detach", "--quiet", str(path), commit], cwd=bare)
     return path
 
 
-def _git(argv: Sequence[str], *, cwd: Path | None) -> subprocess.CompletedProcess[str]:
+def _git(
+    argv: Sequence[str], *, cwd: Path | None, remote: str | None = None
+) -> subprocess.CompletedProcess[str]:
+    from prflagger.vcs.credentials import run_git
+
     command = ["git"] if cwd is None else ["git", f"--git-dir={cwd}"]
-    return subprocess.run(  # noqa: S603
-        [*command, *argv], capture_output=True, text=True, check=False
-    )
+    return run_git([*command, *argv], remote=remote, timeout_s=1800)

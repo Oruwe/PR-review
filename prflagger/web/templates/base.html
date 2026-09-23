@@ -26,6 +26,11 @@
   <nav>{% block nav %}{% endblock %}</nav>
   <span class="spacer"></span>
   <span class="pill" id="conn" hidden>offline</span>
+  {% set who = signed_in_as(request) %}
+  {% if who %}
+  <span class="whoami" title="Signed in with the {{ who }} token">{{ who }}</span>
+  <a class="signout" href="/logout" title="Signed in with the {{ who }} token">Sign out</a>
+  {% endif %}
   <button id="theme" title="Switch between light and dark" aria-label="Switch theme">◐</button>
 </header>
 
@@ -44,7 +49,7 @@
       </div>
       <div class="alert-sub">{{ n.body }}</div>
     </div>
-    <button class="alert-ack" data-ack="{{ n.id }}">Acknowledge</button>
+    {% if can_write(request) %}<button class="alert-ack" data-ack="{{ n.id }}">Acknowledge</button>{% endif %}
   </div>
   {% endfor %}
 </section>

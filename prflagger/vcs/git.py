@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import subprocess
 
+from prflagger.vcs.credentials import run_git
+
 __all__ = ["remote_head"]
 
 
@@ -15,9 +17,9 @@ def remote_head(source: str, branch: str, *, timeout_s: float = 60.0) -> str | N
     than through any one host's API.
     """
     try:
-        completed = subprocess.run(  # noqa: S603
+        completed = run_git(
             ["git", "ls-remote", "--heads", source, f"refs/heads/{branch}"],
-            capture_output=True, text=True, check=False, timeout=timeout_s,
+            remote=source, timeout_s=timeout_s,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None

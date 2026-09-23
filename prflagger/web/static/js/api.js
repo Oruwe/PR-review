@@ -4,12 +4,20 @@
  * the transcript rather than restarting it or losing the middle.
  */
 
+/** A signed-out session goes back to the sign-in page, then returns here. */
+function signInAgain() {
+  const here = location.pathname + location.search;
+  location.assign(`/login?next=${encodeURIComponent(here)}`);
+}
+
 export async function post(path, body) {
   const response = await fetch(path, {
     method: "POST",
+    credentials: "same-origin",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body ?? {}),
   });
+  if (response.status === 401) { signInAgain(); throw new Error("signed out"); }
   const text = await response.text();
   let parsed = null;
   try { parsed = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
@@ -20,7 +28,8 @@ export async function post(path, body) {
 }
 
 export async function get(path) {
-  const response = await fetch(path);
+  const response = await fetch(path, { credentials: "same-origin" });
+  if (response.status === 401) { signInAgain(); throw new Error("signed out"); }
   if (!response.ok) throw new Error(`${path}: ${response.status}`);
   return response.json();
 }

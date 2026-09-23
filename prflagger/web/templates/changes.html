@@ -46,7 +46,7 @@
       <strong style="overflow-wrap:anywhere">{{ n.title }}</strong>
       <span class="spacer" style="flex:1"></span>
       {% if n.acknowledged_at %}<span class="pill">acknowledged</span>
-      {% else %}<button data-ack="{{ n.id }}">Acknowledge</button>{% endif %}
+      {% elif can_write(request) %}<button data-ack="{{ n.id }}">Acknowledge</button>{% endif %}
     </header>
     <p class="subtle" style="margin:0 0 6px">{{ n.body }}</p>
     {% for line in n.evidence %}<div class="evidence">{{ line }}</div>{% endfor %}

@@ -18,6 +18,9 @@ python -m prflagger.cli serve                     # the service + web interface
 Then open <http://127.0.0.1:8000>. Repositories can also be declared in `config.toml`, and
 added from the web interface.
 
+To run it 24/7 on a server — signed in, behind HTTPS, backed up — follow
+[DEPLOY.md](DEPLOY.md): one VM with systemd, or Docker Compose.
+
 ## What you get
 
 **What it is for** — before anything else, the repository's own account of itself: its

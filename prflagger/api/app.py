@@ -23,6 +23,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from prflagger.api.auth import Tokens, install, websocket_role
 from prflagger.api.service import Service
 from prflagger.api.ws import stream_events
 from prflagger.core.config import Config, cache_root
@@ -75,9 +76,12 @@ def create_app(
     *,
     config: Config | None = None,
     watch: bool = True,
+    tokens: Tokens | None = None,
 ) -> FastAPI:
-    """Build the application. `service` is injectable so tests drive a real one."""
+    """Build the application. `service` is injectable so tests drive a real one;
+    `tokens` defaults to the environment's (see `api.auth`)."""
     built = service or Service.build(config)
+    tokens = tokens if tokens is not None else Tokens.from_env()
 
     @contextlib.asynccontextmanager
     async def lifespan(_: FastAPI) -> AsyncIterator[None]:
@@ -99,7 +103,25 @@ def create_app(
             open_only=True, min_level="major", limit=5
         ),
     )
+    templates.env.globals.update(
+        # Viewers see every page, and none of the controls that change anything.
+        # The middleware refuses those requests regardless; hiding them is courtesy.
+        can_write=lambda request: getattr(request.state, "role", "admin") == "admin",
+        signed_in_as=lambda request: (
+            getattr(request.state, "role", None) if getattr(request.state, "auth", False)
+            else None
+        ),
+    )
     app.mount("/static", StaticFiles(directory=str(_WEB / "static")), name="static")
+
+    def render_login(
+        request: Request, *, next: str, error: str, status_code: int = 200  # noqa: A002
+    ) -> Any:
+        return templates.TemplateResponse(
+            request, "login.html", {"next": next, "error": error}, status_code=status_code
+        )
+
+    install(app, tokens, render_login)
 
     # -- views ---------------------------------------------------------------
 
@@ -201,7 +223,10 @@ def create_app(
 
     @app.get("/api/health")
     async def health() -> Any:
-        return built.health()
+        return {
+            **built.health(),
+            "auth": "tokens" if tokens.enabled else "open (loopback only)",
+        }
 
     @app.get("/api/repos")
     async def list_repos() -> Any:
@@ -417,6 +442,9 @@ def create_app(
     async def run_socket(
         websocket: WebSocket, run_id: str, cursor: int = 0, lines: int = 0
     ) -> None:
+        if websocket_role(tokens, websocket) is None:
+            await websocket.close(code=4401)
+            return
         await stream_events(
             websocket, built.bus, run_id=run_id, cursor=cursor, lines=lines
         )
@@ -425,6 +453,9 @@ def create_app(
     async def repo_socket(
         websocket: WebSocket, owner: str, name: str, cursor: int = 0
     ) -> None:
+        if websocket_role(tokens, websocket) is None:
+            await websocket.close(code=4401)
+            return
         await stream_events(websocket, built.bus, repo=f"{owner}/{name}", cursor=cursor)
 
     @app.exception_handler(404)

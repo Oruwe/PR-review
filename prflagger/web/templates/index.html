@@ -9,11 +9,13 @@
       repository&rsquo;s own code.</p>
   </div>
   <span class="spacer"></span>
+  {% if can_write(request) %}
   <form class="toolbar" id="add-repo" style="margin:0">
     <input type="text" name="slug" placeholder="owner/name" aria-label="Repository to watch"
            size="22" required>
     <button class="primary" type="submit">Watch</button>
   </form>
+  {% endif %}
 </div>
 
 <div class="stats" style="margin-bottom:20px">
@@ -111,7 +113,7 @@
 {% block scripts %}
 <script type="module">
 import { post } from "/static/js/api.js";
-document.getElementById("add-repo").addEventListener("submit", async (event) => {
+document.getElementById("add-repo")?.addEventListener("submit", async (event) => {
   event.preventDefault();
   const form = event.currentTarget;
   const button = form.querySelector("button");

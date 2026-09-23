@@ -7,6 +7,8 @@
     prflagger norms --repo <slug>
     prflagger gc [--days N]
     prflagger llm check [--model ID]
+    prflagger backup [--out FILE]
+    prflagger restore FILE [--with-config]
 
 This module is the only place that prints.
 """
@@ -16,6 +18,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import subprocess
 import sys
 import time
@@ -112,6 +115,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     llm_check.add_argument("--model", default="", help="model id (default: [models] light)")
 
+    saving = sub.add_parser("backup", help="snapshot the database (safe while serving)")
+    saving.add_argument("--out", type=Path, default=None,
+                        help="archive to write (default: prflagger-backup-<time>.tar.gz)")
+    restoring = sub.add_parser("restore", help="put a backup back; the service must be stopped")
+    restoring.add_argument("archive", type=Path)
+    restoring.add_argument("--with-config", action="store_true",
+                           help="also restore config.toml from the backup")
+
     args = parser.parse_args(argv)
     _configure_logging()
 
@@ -129,6 +140,10 @@ def main(argv: list[str] | None = None) -> int:
         return _gc(args.days, dry_run=args.dry_run)
     if args.command == "llm":
         return _llm_check(args.model)
+    if args.command == "backup":
+        return _backup(args.out)
+    if args.command == "restore":
+        return _restore(args.archive, with_config=args.with_config)
     return _norms(args.repo)
 
 
@@ -137,17 +152,38 @@ def main(argv: list[str] | None = None) -> int:
 # ----------------------------------------------------------------------------------
 
 
+_LOOPBACK = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
 def _serve(host: str, port: int, *, watch: bool, reload: bool) -> int:
     """Run the always-on service. This is the main entry point for v2."""
     import uvicorn
 
     from prflagger.api.app import create_app
+    from prflagger.api.auth import ADMIN_ENV, Tokens
     from prflagger.api.service import Service
     from prflagger.core.config import load
 
     config = load()
     bind_host = host or config.server.host
     bind_port = port or config.server.port
+
+    try:
+        tokens = Tokens.from_env()
+    except ValueError as error:
+        print(f"refusing to start: {error}", file=sys.stderr)
+        return 2
+    if not tokens.enabled and bind_host not in _LOOPBACK:
+        # Anyone who can reach an open service can add repositories, start runs in
+        # its sandbox and spend its model budget. Loopback is the only safe place
+        # for that; anything else needs a token.
+        print(
+            f"refusing to listen on {bind_host} without a sign-in token.\n"
+            f"  set {ADMIN_ENV} (e.g. `openssl rand -hex 32`), or listen on 127.0.0.1 "
+            "behind an SSH tunnel or VPN.",
+            file=sys.stderr,
+        )
+        return 2
 
     service = Service.build(config)
     for entry in config.repos:
@@ -170,10 +206,32 @@ def _serve(host: str, port: int, *, watch: bool, reload: bool) -> int:
         print("  note: no GitHub token found — public repos only, 60 calls/hour")
     if not watch:
         print("  polling disabled; runs start only when you ask for them")
+    if tokens.enabled:
+        print("  sign-in: admin" + (" and viewer tokens" if tokens.viewer else " token"))
+    else:
+        print("  sign-in: none (listening on loopback only)")
 
-    app = create_app(service, config=config, watch=watch)
-    uvicorn.run(app, host=bind_host, port=bind_port, log_level="warning")
+    app = create_app(service, config=config, watch=watch, tokens=tokens)
+    marker = _mark_running(service.db.path)
+    try:
+        uvicorn.run(app, host=bind_host, port=bind_port, log_level="warning")
+    finally:
+        marker.unlink(missing_ok=True)
     return 0
+
+
+def _mark_running(db_path: Path) -> Path:
+    """Record this process as the one using `db_path`, so a restore can refuse."""
+    import socket
+
+    from prflagger.storage.backup import pid_file
+
+    marker = pid_file(db_path)
+    marker.write_text(
+        json.dumps({"pid": os.getpid(), "host": socket.gethostname(), "since": time.time()}),
+        encoding="utf-8",
+    )
+    return marker
 
 
 def _watch(slug: str) -> int:
@@ -197,6 +255,53 @@ def _watch(slug: str) -> int:
         )
     )
     print(f"watching {slug} (default branch {branch})")
+    return 0
+
+
+def _config_path() -> Path:
+    from prflagger.core.config import CONFIG_ENV
+
+    return Path(os.environ.get(CONFIG_ENV) or "config.toml")
+
+
+def _backup(out: Path | None) -> int:
+    from prflagger.storage.backup import backup
+    from prflagger.storage.db import default_path
+
+    target = out or Path(time.strftime("prflagger-backup-%Y%m%d-%H%M%S.tar.gz"))
+    try:
+        manifest = backup(default_path(), target, config=_config_path())
+    except FileNotFoundError as error:
+        print(f"nothing to back up: {error}", file=sys.stderr)
+        return 1
+    rows = manifest["rows"]
+    print(f"backup      : {target}")
+    print(f"runs        : {rows.get('runs', 0)}   charters: {rows.get('charters', 0)}"
+          f"   norms: {rows.get('norms', 0)}"
+          f"   review comments: {rows.get('review_comments', 0)}")
+    included = manifest["includes_config"]
+    print(f"config      : {'included' if included else 'not found, not included'}")
+    print("not included: " + ", ".join(manifest["not_included"]) + " (rebuilt on demand)")
+    return 0
+
+
+def _restore(archive: Path, *, with_config: bool) -> int:
+    from prflagger.storage.backup import ServiceRunning, restore
+    from prflagger.storage.db import default_path
+
+    try:
+        manifest = restore(archive, default_path(),
+                           config=_config_path() if with_config else None)
+    except ServiceRunning as error:
+        print(f"refused: {error}", file=sys.stderr)
+        return 2
+    except (OSError, ValueError) as error:
+        print(f"could not restore: {error}", file=sys.stderr)
+        return 1
+    print(f"restored    : {archive} (taken {manifest['created_at']})")
+    if manifest.get("previous_database"):
+        print(f"kept        : the database it replaced, at {manifest['previous_database']}")
+    print("next        : start the service; it migrates the schema if needed")
     return 0
 
 

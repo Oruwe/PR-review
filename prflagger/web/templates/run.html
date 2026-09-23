@@ -22,7 +22,7 @@
   </div>
   <span class="spacer"></span>
   <span class="pill" id="state-pill">{{ run.state.value|replace('_',' ') }}</span>
-  <button id="cancel" class="danger">Cancel</button>
+  {% if can_write(request) %}<button id="cancel" class="danger">Cancel</button>{% endif %}
   <a class="button" href="/runs/{{ run.id }}/report">Report</a>
 </div>
 

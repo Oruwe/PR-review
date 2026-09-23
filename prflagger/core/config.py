@@ -242,9 +242,16 @@ def _build(cls: type, data: dict[str, Any]) -> Any:
     return cls(**values)
 
 
-def load(path: Path | str = "config.toml") -> Config:
-    """Read the configuration. A missing file yields documented defaults."""
-    source = Path(path)
+#: Where a deployed service keeps its configuration, when not in the working directory.
+CONFIG_ENV = "PRFLAGGER_CONFIG"
+
+
+def load(path: Path | str | None = None) -> Config:
+    """Read the configuration: `path`, else `$PRFLAGGER_CONFIG`, else ./config.toml.
+
+    A missing file yields documented defaults.
+    """
+    source = Path(path if path is not None else os.environ.get(CONFIG_ENV) or "config.toml")
     if not source.is_file():
         return Config(source=None)
     try:

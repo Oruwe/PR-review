@@ -14,7 +14,7 @@
       &mdash; one behaviour change outranks six lint nits.</p>
   </div>
   <span class="spacer"></span>
-  <button id="poll">Check GitHub now</button>
+  {% if can_write(request) %}<button id="poll">Check GitHub now</button>{% endif %}
 </div>
 
 <div class="toolbar">
@@ -95,7 +95,7 @@
           {% if r.run_id and r.state == 'done' %}
             <a class="button" href="/runs/{{ r.run_id }}/report">Report</a>
           {% else %}
-            <button class="trigger" data-pr="{{ r.number }}">Run</button>
+            {% if can_write(request) %}<button class="trigger" data-pr="{{ r.number }}">Run</button>{% endif %}
           {% endif %}
         </td>
       </tr>
@@ -138,7 +138,7 @@ function applyFilters() {
 search?.addEventListener("input", applyFilters);
 kindFilter?.addEventListener("change", applyFilters);
 
-document.getElementById("poll").addEventListener("click", async (event) => {
+document.getElementById("poll")?.addEventListener("click", async (event) => {
   const button = event.currentTarget;
   button.disabled = true; button.textContent = "Checking…";
   try {

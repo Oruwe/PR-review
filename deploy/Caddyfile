@@ -1,0 +1,8 @@
+# HTTPS in front of PR Flagger. Caddy obtains and renews the certificate itself;
+# point the domain's DNS at this server first. WebSockets pass through unchanged.
+#     sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl reload caddy
+
+flagger.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8000
+}

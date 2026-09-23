@@ -56,6 +56,12 @@ python -m prflagger.cli check --repo <path> --base <sha> --head <sha>
   nothing from outside the repo is added to it.
 - **Memory is per repository.** A charter only ever judges, or is compared with, its own
   repository; `compare()` and `classify()` raise on a mismatch rather than trusting callers.
+- **Credentials come from the environment, and exposure needs a token.** Tokens, keys and
+  webhook URLs are read from environment variables only (`deploy/.env.example` lists them
+  all). `serve` refuses to listen beyond loopback without `PRFLAGGER_ADMIN_TOKEN`; viewers
+  may read and never write, and the middleware enforces it whatever the UI shows. A
+  GitHub token reaches git only as an HTTP header in one process's environment — never in
+  argv, a remote URL or `.git/config`.
 - **Notification level follows what changed, not how much.** Only `major` interrupts (a
   banner on every page until acknowledged, plus the webhook); `notable` is a feed entry;
   `minor` is history only. The webhook URL comes from `PRFLAGGER_NOTIFY_WEBHOOK`, never

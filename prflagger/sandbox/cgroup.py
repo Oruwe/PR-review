@@ -12,13 +12,21 @@ rather than raising: losing a sample must never fail a run.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
 __all__ = ["ContainerProbe", "Reading"]
 
-_CGROUP_ROOT = Path("/sys/fs/cgroup")
+#: Where the host's cgroup tree is visible. When the service itself runs in a
+#: container, its own /sys/fs/cgroup shows only its own cgroup (always, on cgroup
+#: v1), so the host tree is mounted read-only elsewhere and named here.
+_ROOT_ENV = "PRFLAGGER_CGROUP_ROOT"
+
+
+def _cgroup_root() -> Path:
+    return Path(os.environ.get(_ROOT_ENV, "").strip() or "/sys/fs/cgroup")
 
 #: v2 first — on a hybrid host both exist and v2 is the accurate one.
 _V2_DIRS = ("{cid}", "system.slice/docker-{cid}.scope", "docker/{cid}", "unified/docker/{cid}")
@@ -49,7 +57,7 @@ def _read_int(path: Path) -> int | None:
 
 def _first_dir(templates: tuple[str, ...], cid: str) -> Path | None:
     for template in templates:
-        candidate = _CGROUP_ROOT / template.format(cid=cid)
+        candidate = _cgroup_root() / template.format(cid=cid)
         if candidate.is_dir():
             return candidate
     return None
