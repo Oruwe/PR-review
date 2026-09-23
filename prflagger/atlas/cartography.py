@@ -7,6 +7,7 @@ the kind of number that would be quietly wrong forever if it were guessed.
 
 from __future__ import annotations
 
+import os
 import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, field
@@ -59,13 +60,7 @@ class FileFact:
 @dataclass
 class Churn:
     commits: int = 0
-    insertions: int = 0
-    deletions: int = 0
     authors: set[str] = field(default_factory=set)
-
-    @property
-    def touched(self) -> int:
-        return self.insertions + self.deletions
 
 
 def language_of(path: str) -> str:
@@ -164,20 +159,33 @@ def _count_lines(path: Path) -> int:
 def churn_by_path(
     repo_path: Path, *, days: int = 365, max_commits: int = 4000
 ) -> dict[str, Churn]:
-    """How often each file changed, from `git log --numstat`.
+    """How often each file changed, and by how many people, from `git log --name-only`.
 
     A window rather than all history: a file rewritten constantly two years ago
     and untouched since is not a hotspot today, and treating it as one buries the
     files that are actually moving.
+
+    Commits, not lines. The clone is blob-less (`--filter=blob:none`), so history
+    has every commit and tree but no old file contents. Counting lines would need
+    each commit's blobs, which git fetches lazily — one round trip per commit, so
+    a year of a busy repository is hundreds of requests and the rebuild times out.
+    Which files changed, and who changed them, is in the trees alone.
     """
-    completed = subprocess.run(  # noqa: S603
-        [
-            "git", "-C", str(repo_path), "log", f"--since={days}.days.ago",
-            f"--max-count={max_commits}", "--numstat", "--no-renames",
-            "--pretty=format:%x01%an",
-        ],
-        capture_output=True, text=True, check=False, timeout=180,
-    )
+    try:
+        completed = subprocess.run(  # noqa: S603
+            [
+                "git", "-C", str(repo_path), "log", f"--since={days}.days.ago",
+                f"--max-count={max_commits}", "--name-only", "--no-renames",
+                "--pretty=format:%x01%an",
+            ],
+            capture_output=True, text=True, check=False, timeout=180,
+            # Belt and braces: if anything here ever needed a blob, fail fast
+            # rather than fetch it; churn is a measurement, not worth a download.
+            env={**os.environ, "GIT_NO_LAZY_FETCH": "1"},
+        )
+    except subprocess.TimeoutExpired:
+        log.warning("churn.unavailable", error="git log timed out")
+        return {}
     if completed.returncode != 0:
         log.warning("churn.unavailable", error=completed.stderr.strip()[:200])
         return {}
@@ -190,16 +198,12 @@ def churn_by_path(
             author = line[1:].strip()
             seen_this_commit = set()
             continue
-        parts = line.split("\t")
-        if len(parts) != 3:
+        path = line.strip()
+        if not path or path in seen_this_commit:
             continue
-        added, removed, path = parts
+        seen_this_commit.add(path)
         entry = churn[path]
-        if path not in seen_this_commit:
-            entry.commits += 1
-            seen_this_commit.add(path)
+        entry.commits += 1
         if author:
             entry.authors.add(author)
-        entry.insertions += int(added) if added.isdigit() else 0
-        entry.deletions += int(removed) if removed.isdigit() else 0
     return dict(churn)
