@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.requires import require_git
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SEEDS = REPO_ROOT / ".cache" / "seeds.json"
 
@@ -31,6 +33,7 @@ EXPECTED = {
 @pytest.fixture(scope="module")
 def seeds() -> dict[str, dict[str, str]]:
     if not SEEDS.is_file():
+        require_git()  # seeding needs git; without it these cannot run at all
         pytest.fail("run `python -m scripts.seed_target` first")
     return json.loads(SEEDS.read_text(encoding="utf-8"))
 

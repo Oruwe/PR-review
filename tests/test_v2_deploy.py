@@ -160,6 +160,36 @@ def test_the_example_config_is_a_complete_service_config() -> None:
     assert loaded.brain == development.brain
 
 
+def test_only_a_tool_that_is_truly_absent_turns_a_failure_into_a_skip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The service runs this suite on itself in a sandbox without git or Docker.
+
+    There a test that needs git skips and says why. Anywhere git exists the same
+    failure stays a failure, so the conversion cannot hide a real one.
+    """
+    from tests.requires import missing_tool
+
+    installed = shutil.which("git") is not None
+    monkeypatch.setenv("PATH", str(tmp_path))  # nothing on PATH: git is truly absent
+    try:
+        try:
+            subprocess.run(["git", "--version"], check=False)  # noqa: S603, S607
+        except FileNotFoundError as absent:
+            raise RuntimeError("could not clone") from absent
+    except RuntimeError as wrapped:
+        assert missing_tool(wrapped) == "git", "found through the exception chain"
+        failure = wrapped
+    monkeypatch.undo()
+
+    if installed:
+        assert missing_tool(failure) is None, "git is installed here: that stays a failure"
+    try:
+        (tmp_path / "seeds.json").read_text()
+    except FileNotFoundError as data_file:
+        assert missing_tool(data_file) is None, "a missing file is not a missing tool"
+
+
 def test_memory_is_read_from_a_mounted_host_cgroup_tree(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

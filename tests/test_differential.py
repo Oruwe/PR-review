@@ -27,6 +27,7 @@ from prflagger.characterize import differential as differential_module
 from prflagger.characterize import generate
 from prflagger.characterize import validate as validate_module
 from prflagger.characterize.differential import declared_scope, differential
+from tests.requires import require_git
 
 SEEDS = Path(".cache/seeds.json")
 
@@ -64,6 +65,7 @@ KNOWN_SYMBOLS = ("split_arg_string", "measure_table", "join_arg_string")
 @pytest.fixture
 def seeds() -> dict[str, dict[str, str]]:
     if not SEEDS.is_file():
+        require_git()  # seeding needs git; without it these cannot run at all
         pytest.fail("run `python -m scripts.seed_target` to create the seeded branches")
     return json.loads(SEEDS.read_text(encoding="utf-8"))
 

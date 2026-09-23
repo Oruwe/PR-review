@@ -18,6 +18,7 @@ from prflagger.models import Finding
 from prflagger.probes import api_diff, coverage_delta, lint_regression
 from prflagger.probes._support import SEVERITY
 from prflagger.probes.api_diff import public_surface
+from tests.requires import require_git
 
 SEEDS = Path(".cache/seeds.json")
 
@@ -25,6 +26,7 @@ SEEDS = Path(".cache/seeds.json")
 @pytest.fixture
 def seeds() -> dict[str, dict[str, str]]:
     if not SEEDS.is_file():
+        require_git()  # seeding needs git; without it these cannot run at all
         pytest.fail("run `python -m scripts.seed_target` to create the seeded branches")
     return json.loads(SEEDS.read_text(encoding="utf-8"))
 

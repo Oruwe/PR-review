@@ -2,15 +2,58 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
+import tempfile
 import tomllib
+from collections.abc import Generator
 from pathlib import Path
 
 import pytest
 
+from tests.requires import MISSING_TOOL_REASONS, missing_tool
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TOY_FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Keep the cache writable when the checkout is not.
+
+    PR Flagger runs this suite on itself in its own sandbox, where the checkout
+    is mounted read-only and the default `.cache` beside it cannot be created.
+    Only then does the cache move to a temporary directory: a writable checkout
+    keeps `.cache`, and the seeded CI job relies on the click clone it holds.
+    """
+    if os.environ.get("PRFLAGGER_CACHE_DIR"):
+        return
+    try:
+        cache = Path(".cache")
+        cache.mkdir(exist_ok=True)
+        with tempfile.TemporaryFile(dir=cache):
+            pass
+    except OSError:
+        os.environ["PRFLAGGER_CACHE_DIR"] = tempfile.mkdtemp(prefix="prflagger-cache-")
+
+
+@pytest.hookimpl(wrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> Generator[None, pytest.TestReport, pytest.TestReport]:
+    """A test that failed only because git or Docker is not installed is a skip.
+
+    Most tests reach git through shared fixtures and helpers, so the absence is
+    recognised where it surfaces rather than guessed per test. See `tests.requires`.
+    """
+    report = yield
+    if report.failed and call.excinfo is not None:
+        tool = missing_tool(call.excinfo.value)
+        if tool is not None:
+            report.outcome = "skipped"
+            report.longrepr = (str(item.path), item.location[1] or 0,
+                               f"Skipped: {MISSING_TOOL_REASONS[tool]}")
+    return report
 
 
 _AWS_CREDENTIAL_VARS = (
